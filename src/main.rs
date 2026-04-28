@@ -1,5 +1,6 @@
 mod app;
 mod completion;
+mod config;
 mod detection;
 mod git;
 mod input;
