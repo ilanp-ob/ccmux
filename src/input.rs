@@ -18,6 +18,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::NewWorktree { .. } => handle_new_worktree_mode(app, key),
         Mode::CreatePullRequest { .. } => handle_create_pr_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
+        Mode::WorktreeFlow { .. } => handle_worktree_flow_mode(app, key),
     }
 }
 
@@ -79,6 +80,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         // Help
         KeyCode::Char('?') => {
             app.show_help();
+        }
+
+        // Start worktree flow
+        KeyCode::Char('w') => {
+            app.start_worktree_flow();
         }
 
         _ => {}
@@ -515,5 +521,252 @@ fn handle_help_mode(app: &mut App, key: KeyEvent) {
             app.cancel();
         }
         _ => {}
+    }
+}
+
+fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
+    use crate::app::mode::{BranchSelectField, WorktreeFlowState};
+    use crate::config::{AVAILABLE_EFFORTS, AVAILABLE_MODELS};
+
+    let state = if let Mode::WorktreeFlow { ref state } = app.mode {
+        state.clone()
+    } else {
+        return;
+    };
+
+    match state {
+        WorktreeFlowState::Fetching => {
+            if key.code == KeyCode::Esc {
+                app.cancel();
+            }
+        }
+
+        WorktreeFlowState::BranchSelect { field, .. } => match field {
+            BranchSelectField::Filter => match key.code {
+                KeyCode::Esc => app.cancel(),
+                KeyCode::Enter => app.worktree_flow_confirm_branch(),
+                KeyCode::Tab => {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::BranchSelect {
+                            ref mut create_new,
+                            ref mut field,
+                            ..
+                        },
+                    } = app.mode
+                    {
+                        if *create_new {
+                            *field = BranchSelectField::BaseBranch;
+                        } else {
+                            *create_new = true;
+                        }
+                    }
+                }
+                KeyCode::Down => {
+                    let count = app.worktree_flow_filtered_branches().len();
+                    if count > 0 {
+                        if let Mode::WorktreeFlow {
+                            state: WorktreeFlowState::BranchSelect {
+                                ref mut selected, ..
+                            },
+                        } = app.mode
+                        {
+                            *selected = Some(selected.map(|i| (i + 1) % count).unwrap_or(0));
+                        }
+                    }
+                }
+                KeyCode::Up => {
+                    let count = app.worktree_flow_filtered_branches().len();
+                    if count > 0 {
+                        if let Mode::WorktreeFlow {
+                            state: WorktreeFlowState::BranchSelect {
+                                ref mut selected, ..
+                            },
+                        } = app.mode
+                        {
+                            *selected = Some(
+                                selected
+                                    .map(|i| if i == 0 { count - 1 } else { i - 1 })
+                                    .unwrap_or(count - 1),
+                            );
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::BranchSelect {
+                            ref mut filter_input,
+                            ref mut selected,
+                            ref mut create_new,
+                            ..
+                        },
+                    } = app.mode
+                    {
+                        filter_input.pop();
+                        *selected = None;
+                        *create_new = false;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::BranchSelect {
+                            ref mut filter_input,
+                            ref mut selected,
+                            ref mut create_new,
+                            ..
+                        },
+                    } = app.mode
+                    {
+                        filter_input.push(c);
+                        *selected = None;
+                        *create_new = false;
+                    }
+                }
+                _ => {}
+            },
+            BranchSelectField::BaseBranch => match key.code {
+                KeyCode::Esc => app.cancel(),
+                KeyCode::Enter => app.worktree_flow_confirm_branch(),
+                KeyCode::Tab | KeyCode::BackTab => {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::BranchSelect { ref mut field, .. },
+                    } = app.mode
+                    {
+                        *field = BranchSelectField::Filter;
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::BranchSelect {
+                            ref mut base_branch,
+                            ..
+                        },
+                    } = app.mode
+                    {
+                        base_branch.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
+                        if let Mode::WorktreeFlow {
+                            state: WorktreeFlowState::BranchSelect {
+                                ref mut base_branch,
+                                ..
+                            },
+                        } = app.mode
+                        {
+                            base_branch.push(c);
+                        }
+                    }
+                }
+                _ => {}
+            },
+        },
+
+        WorktreeFlowState::FolderName { .. } => match key.code {
+            KeyCode::Esc => app.cancel(),
+            KeyCode::Enter => app.worktree_flow_confirm_folder(),
+            KeyCode::Backspace => {
+                if let Mode::WorktreeFlow {
+                    state: WorktreeFlowState::FolderName { ref mut folder, .. },
+                } = app.mode
+                {
+                    folder.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    if let Mode::WorktreeFlow {
+                        state: WorktreeFlowState::FolderName { ref mut folder, .. },
+                    } = app.mode
+                    {
+                        folder.push(c);
+                    }
+                }
+            }
+            _ => {}
+        },
+
+        WorktreeFlowState::ClaudeOptions {
+            field,
+            ..
+        } => match key.code {
+            KeyCode::Esc => app.cancel(),
+            KeyCode::Enter => app.worktree_flow_execute(),
+            KeyCode::Tab => {
+                if let Mode::WorktreeFlow {
+                    state: WorktreeFlowState::ClaudeOptions { ref mut field, .. },
+                } = app.mode
+                {
+                    *field = (*field + 1) % 3;
+                }
+            }
+            KeyCode::BackTab => {
+                if let Mode::WorktreeFlow {
+                    state: WorktreeFlowState::ClaudeOptions { ref mut field, .. },
+                } = app.mode
+                {
+                    *field = if *field == 0 { 2 } else { *field - 1 };
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Mode::WorktreeFlow {
+                    state: WorktreeFlowState::ClaudeOptions {
+                        ref mut model_index,
+                        ref mut effort_index,
+                        ref mut launch_claude,
+                        field,
+                        ..
+                    },
+                } = app.mode
+                {
+                    match field {
+                        0 => {
+                            if *model_index > 0 {
+                                *model_index -= 1;
+                            }
+                        }
+                        1 => {
+                            if *effort_index > 0 {
+                                *effort_index -= 1;
+                            }
+                        }
+                        2 => *launch_claude = !*launch_claude,
+                        _ => {}
+                    }
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Mode::WorktreeFlow {
+                    state: WorktreeFlowState::ClaudeOptions {
+                        ref mut model_index,
+                        ref mut effort_index,
+                        ref mut launch_claude,
+                        field,
+                        ..
+                    },
+                } = app.mode
+                {
+                    match field {
+                        0 => {
+                            if *model_index < AVAILABLE_MODELS.len() - 1 {
+                                *model_index += 1;
+                            }
+                        }
+                        1 => {
+                            if *effort_index < AVAILABLE_EFFORTS.len() - 1 {
+                                *effort_index += 1;
+                            }
+                        }
+                        2 => *launch_claude = !*launch_claude,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        },
+
+        WorktreeFlowState::Executing => {
+            // No input during execution
+        }
     }
 }
