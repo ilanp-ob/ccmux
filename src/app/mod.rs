@@ -6,8 +6,8 @@
 //! - Session actions and execution
 //! - Dialog flows (rename, new session, worktree, PR)
 
-mod helpers;
-mod mode;
+pub(crate) mod helpers;
+pub(crate) mod mode;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -22,11 +22,15 @@ use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
 pub use mode::{
-    CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, SessionAction,
+    BranchSelectField, CreatePullRequestField, Mode, NewSessionField, NewWorktreeField,
+    SessionAction, WorktreeFlowState,
 };
 
+// Re-export helpers needed by workflow module
+pub use helpers::{derive_folder_name, expand_path, is_houston_repo};
+
 // Use helpers internally
-use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
+use helpers::{default_worktree_path, sanitize_for_session_name};
 
 /// Main application state
 pub struct App {
@@ -195,7 +199,7 @@ impl App {
     }
 
     /// Refresh sessions without affecting messages (for use after git operations)
-    fn refresh_sessions(&mut self) -> bool {
+    pub(crate) fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
         match Tmux::list_all_sessions(self.server_filter.as_deref()) {
             Ok(sessions) => {

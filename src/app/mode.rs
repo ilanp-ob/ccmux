@@ -62,8 +62,48 @@ pub enum Mode {
         /// Which field is active
         field: CreatePullRequestField,
     },
+    /// Enhanced worktree creation workflow
+    WorktreeFlow {
+        state: WorktreeFlowState,
+    },
     /// Showing help
     Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeFlowState {
+    Fetching,
+    BranchSelect {
+        all_branches: Vec<String>,
+        filter_input: String,
+        selected: Option<usize>,
+        create_new: bool,
+        base_branch: String,
+        field: BranchSelectField,
+    },
+    FolderName {
+        branch: String,
+        is_new_branch: bool,
+        base_branch: String,
+        folder: String,
+    },
+    ClaudeOptions {
+        branch: String,
+        is_new_branch: bool,
+        base_branch: String,
+        folder: String,
+        model_index: usize,
+        effort_index: usize,
+        launch_claude: bool,
+        field: usize,
+    },
+    Executing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchSelectField {
+    Filter,
+    BaseBranch,
 }
 
 /// An action that can be performed on a session
