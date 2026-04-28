@@ -12,7 +12,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, CreatePullRequestField, NewSessionField, NewWorktreeField, SessionAction};
+use crate::app::{
+    App, BranchSelectField, CreatePullRequestField, NewSessionField, NewWorktreeField,
+    SessionAction, WorktreeFlowState,
+};
+use crate::config::{AVAILABLE_EFFORTS, AVAILABLE_MODELS};
 
 use super::help::centered_rect;
 
@@ -731,4 +735,277 @@ pub fn render_rename_dialog(frame: &mut Frame, old_name: &str, new_name: &str) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
+}
+
+pub fn render_worktree_flow_dialog(
+    frame: &mut Frame,
+    app: &App,
+    state: &WorktreeFlowState,
+) {
+    match state {
+        WorktreeFlowState::Fetching => {
+            let area = centered_rect(40, 5, frame.area());
+            let block = Block::default()
+                .title(" Worktree ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+            let text = Paragraph::new("  Fetching remote branches...").block(block);
+            frame.render_widget(Clear, area);
+            frame.render_widget(text, area);
+        }
+
+        WorktreeFlowState::BranchSelect {
+            filter_input,
+            selected,
+            create_new,
+            base_branch,
+            field,
+            ..
+        } => {
+            let filtered = app.worktree_flow_filtered_branches();
+            let branches_to_show = filtered.len().min(10);
+            let extra_lines = if *create_new { 3 } else { 0 };
+            let dialog_height = 8 + branches_to_show as u16 + extra_lines as u16;
+            let area = centered_rect(70, dialog_height, frame.area());
+
+            let block = Block::default()
+                .title(" Select Branch ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let mut lines = Vec::new();
+
+            let filter_style = if *field == BranchSelectField::Filter {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let new_indicator = if *create_new {
+                Span::styled(" (new branch)", Style::default().fg(Color::Green))
+            } else {
+                Span::raw("")
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled("Search: ", filter_style),
+                Span::styled(filter_input.as_str(), Style::default().fg(Color::Yellow)),
+                if *field == BranchSelectField::Filter {
+                    Span::raw("_")
+                } else {
+                    Span::raw("")
+                },
+                new_indicator,
+            ]));
+
+            if !filtered.is_empty() {
+                lines.push(Line::styled(
+                    "        ─────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                ));
+
+                for (i, branch) in filtered.iter().take(10).enumerate() {
+                    let is_sel = *selected == Some(i);
+                    let prefix = if is_sel { "      > " } else { "        " };
+                    let style = if is_sel {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    lines.push(Line::styled(format!("{}{}", prefix, branch), style));
+                }
+
+                if filtered.len() > 10 {
+                    lines.push(Line::styled(
+                        format!("        ... and {} more", filtered.len() - 10),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+
+                lines.push(Line::styled(
+                    "        ─────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            if *create_new {
+                lines.push(Line::raw(""));
+                let base_style = if *field == BranchSelectField::BaseBranch {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Base:   ", base_style),
+                    Span::styled(base_branch.as_str(), Style::default().fg(Color::Cyan)),
+                    if *field == BranchSelectField::BaseBranch {
+                        Span::raw("_")
+                    } else {
+                        Span::raw("")
+                    },
+                ]));
+            }
+
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "↑↓ select  Tab new branch  Enter confirm  Esc cancel",
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let paragraph = Paragraph::new(Text::from(lines))
+                .block(block)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+
+        WorktreeFlowState::FolderName {
+            branch, folder, ..
+        } => {
+            let area = centered_rect(60, 8, frame.area());
+            let block = Block::default()
+                .title(" Folder Name ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(branch.as_str(), Style::default().fg(Color::Cyan)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled(
+                        "Folder: ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(folder.as_str(), Style::default().fg(Color::Yellow)),
+                    Span::raw("_"),
+                ]),
+                Line::raw(""),
+                Line::styled(
+                    "Edit or press Enter to confirm  Esc cancel",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+
+            let paragraph = Paragraph::new(Text::from(lines))
+                .block(block)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+
+        WorktreeFlowState::ClaudeOptions {
+            branch,
+            folder,
+            model_index,
+            effort_index,
+            launch_claude,
+            field,
+            ..
+        } => {
+            let area = centered_rect(60, 12, frame.area());
+            let block = Block::default()
+                .title(" Claude Options ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let model_style = if *field == 0 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let effort_style = if *field == 1 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let launch_style = if *field == 2 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let model = AVAILABLE_MODELS[*model_index];
+            let effort = AVAILABLE_EFFORTS[*effort_index];
+            let launch_str = if *launch_claude { "YES" } else { "NO" };
+            let launch_color = if *launch_claude {
+                Color::Green
+            } else {
+                Color::Red
+            };
+
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(branch.as_str(), Style::default().fg(Color::Cyan)),
+                    Span::raw("  →  "),
+                    Span::styled(folder.as_str(), Style::default().fg(Color::Magenta)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Model:  ", model_style),
+                    Span::styled(
+                        format!("◀ {} ▶", model),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Effort: ", effort_style),
+                    Span::styled(
+                        format!("◀ {} ▶", effort),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Launch: ", launch_style),
+                    Span::styled(
+                        launch_str,
+                        Style::default()
+                            .fg(launch_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::raw(""),
+                Line::styled(
+                    "Tab next  ←→ change  Enter confirm  Esc cancel",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+
+            let paragraph = Paragraph::new(Text::from(lines))
+                .block(block)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(Clear, area);
+            frame.render_widget(paragraph, area);
+        }
+
+        WorktreeFlowState::Executing => {
+            let area = centered_rect(40, 5, frame.area());
+            let block = Block::default()
+                .title(" Worktree ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+            let text = Paragraph::new("  Creating worktree...").block(block);
+            frame.render_widget(Clear, area);
+            frame.render_widget(text, area);
+        }
+    }
 }

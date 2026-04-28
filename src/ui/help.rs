@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 pub fn render_help(frame: &mut Frame) {
-    let area = centered_rect(60, 21, frame.area());
+    let area = centered_rect(60, 22, frame.area());
 
     let block = Block::default()
         .title(" Help ")
@@ -33,6 +33,7 @@ pub fn render_help(frame: &mut Frame) {
         Line::raw("  n           New session"),
         Line::raw("  K           Kill session"),
         Line::raw("  r           Rename session"),
+        Line::raw("  w           Create worktree"),
         Line::raw("  /           Filter sessions"),
         Line::raw("  R           Refresh list"),
         Line::raw(""),

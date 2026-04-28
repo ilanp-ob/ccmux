@@ -19,7 +19,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Mode};
-use crate::session::ClaudeCodeStatus;
+use crate::session::{ClaudeCodeStatus, PaneType};
 
 /// Render the application UI
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -108,6 +108,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Help => {
             help::render_help(frame);
         }
+        Mode::WorktreeFlow { ref state } => {
+            dialogs::render_worktree_flow_dialog(frame, app, state);
+        }
         Mode::Normal | Mode::ActionMenu => {}
     }
 
@@ -173,6 +176,16 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .max()
         .unwrap_or(10)
         .max(10);
+
+    let show_server_tags = {
+        let mut servers = std::collections::HashSet::new();
+        for s in &filtered {
+            if let Some(ref server) = s.server {
+                servers.insert(server.as_str());
+            }
+        }
+        servers.len() > 1
+    };
 
     let mut items: Vec<ListItem> = Vec::new();
 
@@ -265,8 +278,25 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             vec![]
         };
 
-        let mut line_spans = vec![
-            Span::raw(format!(" {} ", marker)),
+        let mut line_spans = vec![Span::raw(format!(" {} ", marker))];
+
+        if show_server_tags {
+            if let Some(ref server) = session.server {
+                line_spans.push(Span::styled(
+                    format!("[{}] ", server),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+        }
+
+        if session.pane_type == PaneType::Ocli {
+            line_spans.push(Span::styled(
+                "[ocli] ",
+                Style::default().fg(Color::Blue),
+            ));
+        }
+
+        line_spans.extend([
             Span::styled(
                 format!("{:<width$}", display_names[i], width = max_name_len),
                 name_style,
@@ -280,7 +310,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             ),
             Span::raw("  "),
             Span::styled(session.display_path(), Style::default().fg(path_color)),
-        ];
+        ]);
         line_spans.extend(git_spans);
 
         let line = Line::from(line_spans);
@@ -559,6 +589,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
         Mode::NewWorktree { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
         Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch  esc cancel",
+        Mode::WorktreeFlow { .. } => "  ⏎ confirm  tab next  ←→ change  esc cancel",
         Mode::Help => "  q close",
     };
 
