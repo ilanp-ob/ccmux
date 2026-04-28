@@ -1,6 +1,6 @@
-# claude-tmux
+# ccmux
 
-A terminal user interface for managing multiple Claude Code sessions within tmux. claude-tmux provides a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree and pull request support.
+A terminal user interface for managing multiple Claude Code sessions within tmux. ccmux is a fork of [claude-tmux](https://github.com/nielsgroen/claude-tmux) by Niels Groeneveld, providing a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree and pull request support.
 
 ## Installation
 
@@ -9,40 +9,40 @@ A terminal user interface for managing multiple Claude Code sessions within tmux
 Just run:
 
 ```bash
-cargo install claude-tmux
+cargo install ccmux
 ```
 
 Add the following line to your `~/.tmux.conf`:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/claude-tmux"
+bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/ccmux"
 ```
 
 ### Build from source
 
 ```bash
-git clone https://github.com/nielsgroen/claude-tmux.git
-cd claude-tmux
+git clone https://github.com/ilanp-ob/ccmux.git
+cd ccmux
 cargo build --release
 ```
 
-Add this to your `~/.tmux.conf` to bind claude-tmux to a key:
+Add this to your `~/.tmux.conf` to bind ccmux to a key:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 30 "/path/to/claude-tmux"
+bind-key C-c display-popup -E -w 80 -h 30 "/path/to/ccmux"
 ```
 
 ### How to use
 
 Reload your tmux configuration.
-Press `Ctrl-b, Ctrl-c` to open claude-tmux from any tmux session.
+Press `Ctrl-b, Ctrl-c` to open ccmux from any tmux session.
 
 To use pull requests, make sure you have `gh` installed.
 
 ### Tmux options
 
 Options:
-- `-E` — Close popup when claude-tmux exits
+- `-E` — Close popup when ccmux exits
 - `-w 80 -h 30` — Popup dimensions (adjust to preference)
 
 ## Features
@@ -57,11 +57,11 @@ Options:
 
 ## Screenshots
 
-View the screenshots at [GitHub](https://github.com/nielsgroen/claude-tmux).
+View the screenshots at [GitHub](https://github.com/ilanp-ob/ccmux).
 
-<img src="docs/images/screenshot.png" alt="claude-tmux Screenshot" width="400">
+<img src="docs/images/screenshot.png" alt="ccmux Screenshot" width="400">
 
-<img src="docs/images/screenshot2.png" alt="claude-tmux Screenshot 2" width="400">
+<img src="docs/images/screenshot2.png" alt="ccmux Screenshot 2" width="400">
 
 **Status indicators:**
 - `●` — Working: Claude is actively processing
@@ -101,7 +101,7 @@ View the screenshots at [GitHub](https://github.com/nielsgroen/claude-tmux).
 
 ## Status Detection
 
-claude-tmux detects Claude Code status by analyzing pane content:
+ccmux detects Claude Code status by analyzing pane content:
 
 | Pattern | Status |
 |---------|--------|
@@ -112,7 +112,7 @@ claude-tmux detects Claude Code status by analyzing pane content:
 
 ## Session Model
 
-claude-tmux identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
+ccmux identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
 
 Sessions are sorted with attached sessions first, then alphabetically by name.
 
@@ -128,7 +128,7 @@ Sessions are sorted with attached sessions first, then alphabetically by name.
 ## Project Structure
 
 ```
-claude-tmux/
+ccmux/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs        # Entry point, terminal setup

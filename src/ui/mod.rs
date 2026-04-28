@@ -127,9 +127,9 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default();
 
     let title = format!(
-        "─ claude-tmux ─{:─>width$}",
+        "─ ccmux ─{:─>width$}",
         current,
-        width = area.width as usize - 15
+        width = area.width as usize - 9
     );
 
     let header = Paragraph::new(title)

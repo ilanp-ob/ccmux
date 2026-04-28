@@ -1,5 +1,7 @@
 A manager for tmux sessions that use Claude Code
 Copyright (C) 2026 Niels Groeneveld
+Copyright (C) 2026 Ilan Peretz (fork — ccmux)
+Based on claude-tmux by Niels Groeneveld (https://github.com/nielsgroen/claude-tmux)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
