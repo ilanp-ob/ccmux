@@ -71,6 +71,7 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum WorktreeFlowState {
     Fetching,
     BranchSelect {

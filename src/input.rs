@@ -686,10 +686,7 @@ fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
             _ => {}
         },
 
-        WorktreeFlowState::ClaudeOptions {
-            field,
-            ..
-        } => match key.code {
+        WorktreeFlowState::ClaudeOptions { .. } => match key.code {
             KeyCode::Esc => app.cancel(),
             KeyCode::Enter => app.worktree_flow_execute(),
             KeyCode::Tab => {

@@ -24,6 +24,7 @@ pub enum PaneType {
 }
 
 impl PaneType {
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             PaneType::Claude => "claude",
