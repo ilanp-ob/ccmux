@@ -123,6 +123,50 @@ impl GitContext {
         Ok(())
     }
 
+    /// List all branches (local + remote), with remote branches prefixed by their remote name.
+    pub fn list_all_branches(repo_path: &Path) -> Result<Vec<String>> {
+        let repo = Repository::discover(repo_path).context("Failed to open repository")?;
+        let mut branches = Vec::new();
+
+        // Local branches
+        for branch_result in repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            if let Ok(Some(name)) = branch.name() {
+                branches.push(name.to_string());
+            }
+        }
+
+        // Remote branches (skip HEAD references)
+        for branch_result in repo.branches(Some(git2::BranchType::Remote))? {
+            let (branch, _) = branch_result?;
+            if let Ok(Some(name)) = branch.name() {
+                if name.ends_with("/HEAD") {
+                    continue;
+                }
+                branches.push(name.to_string());
+            }
+        }
+
+        // Sort: main/master first, then local branches, then remote branches
+        branches.sort_by(|a, b| {
+            let a_is_main = a == "main" || a == "master";
+            let b_is_main = b == "main" || b == "master";
+            let a_is_remote = a.contains('/');
+            let b_is_remote = b.contains('/');
+            match (a_is_main, b_is_main) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => match (a_is_remote, b_is_remote) {
+                    (false, true) => std::cmp::Ordering::Less,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    _ => a.cmp(b),
+                },
+            }
+        });
+
+        Ok(branches)
+    }
+
     /// Delete the worktree at the given path using `git worktree remove`
     /// Returns an error if the worktree has uncommitted changes (unless force=true)
     pub fn delete_worktree(worktree_path: &Path, force: bool) -> Result<()> {
