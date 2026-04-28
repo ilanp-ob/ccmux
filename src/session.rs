@@ -16,6 +16,22 @@ pub enum ClaudeCodeStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneType {
+    #[default]
+    Claude,
+    Ocli,
+}
+
+impl PaneType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PaneType::Claude => "claude",
+            PaneType::Ocli => "ocli",
+        }
+    }
+}
+
 impl ClaudeCodeStatus {
     /// Returns the display symbol for this status
     pub fn symbol(&self) -> &'static str {
@@ -71,6 +87,8 @@ pub struct Session {
     pub panes: Vec<Pane>,
     /// Pane ID containing Claude Code, if any
     pub claude_code_pane: Option<String>,
+    /// Type of detected pane (Claude or ocli)
+    pub pane_type: PaneType,
     /// Status of Claude Code in this session
     pub claude_code_status: ClaudeCodeStatus,
     /// Window label to show next to the session name, used when a session
@@ -81,6 +99,8 @@ pub struct Session {
     pub target_window_index: Option<String>,
     /// Git context, if the working directory is a git repository
     pub git_context: Option<GitContext>,
+    /// tmux server name (socket name), if not the default server
+    pub server: Option<String>,
 }
 
 impl Session {

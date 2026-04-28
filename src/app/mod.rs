@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::detection::{detect_static_status, detect_status};
+use crate::detection::{detect_ocli_status, detect_static_status, detect_status};
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
-use crate::session::{ClaudeCodeStatus, Session};
+use crate::session::{ClaudeCodeStatus, PaneType, Session};
 use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
@@ -62,6 +62,14 @@ pub struct App {
     pane_content_cache: HashMap<String, String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
+    /// Application configuration
+    pub config: crate::config::Config,
+    /// Optional server filter (--server CLI flag)
+    pub server_filter: Option<String>,
+    /// Source repo path for worktree flow
+    pub worktree_flow_source_repo: Option<std::path::PathBuf>,
+    /// Server name for worktree flow
+    pub worktree_flow_server: Option<String>,
 }
 
 impl App {
@@ -70,9 +78,19 @@ impl App {
     // =========================================================================
 
     /// Create a new App instance
-    pub fn new() -> Result<Self> {
-        let sessions = Tmux::list_sessions()?;
-        let current_session = Tmux::current_session()?;
+    pub fn new(server_filter: Option<String>, config: crate::config::Config) -> Result<Self> {
+        let sessions = Tmux::list_all_sessions(server_filter.as_deref())?;
+        let current_session = {
+            let servers = Tmux::discover_servers();
+            let mut found = None;
+            for s in &servers {
+                if let Ok(Some(name)) = Tmux::current_session(Some(s)) {
+                    found = Some(name);
+                    break;
+                }
+            }
+            found
+        };
 
         let mut app = Self {
             sessions,
@@ -91,6 +109,10 @@ impl App {
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
             last_status_tick: Instant::now(),
+            config,
+            server_filter,
+            worktree_flow_source_repo: None,
+            worktree_flow_server: None,
         };
 
         app.update_preview();
@@ -101,17 +123,15 @@ impl App {
     pub fn update_preview(&mut self) {
         const PREVIEW_LINES: usize = 15;
 
-        let pane_id = self.selected_session().and_then(|session| {
-            // Prefer Claude pane, fall back to first pane
-            session
-                .claude_code_pane
-                .clone()
-                .or_else(|| session.panes.first().map(|p| p.id.clone()))
+        let pane_info = self.selected_session().and_then(|session| {
+            let id = session.claude_code_pane.clone()
+                .or_else(|| session.panes.first().map(|p| p.id.clone()));
+            id.map(|id| (id, session.server.clone()))
         });
 
-        self.preview_content = pane_id.and_then(|id| {
+        self.preview_content = pane_info.and_then(|(id, server)| {
             // Don't strip empty lines - preserve visual layout for preview
-            Tmux::capture_pane(&id, PREVIEW_LINES, false).ok()
+            Tmux::capture_pane(server.as_deref(), &id, PREVIEW_LINES, false).ok()
         });
     }
 
@@ -128,26 +148,31 @@ impl App {
         }
         self.last_status_tick = Instant::now();
 
-        // Collect (session_index, pane_id) first to satisfy the borrow checker.
-        let targets: Vec<(usize, String)> = self
+        // Collect (session_index, pane_id, server, pane_type) first to satisfy the borrow checker.
+        let targets: Vec<(usize, String, Option<String>, PaneType)> = self
             .sessions
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.claude_code_pane.as_ref().map(|id| (i, id.clone())))
+            .filter_map(|(i, s)| {
+                s.claude_code_pane.as_ref().map(|id| (i, id.clone(), s.server.clone(), s.pane_type))
+            })
             .collect();
 
-        for (idx, pane_id) in targets {
-            let Ok(content) = Tmux::capture_pane(&pane_id, 15, true) else {
+        for (idx, pane_id, server, pane_type) in targets {
+            let Ok(content) = Tmux::capture_pane(server.as_deref(), &pane_id, 15, true) else {
                 continue;
             };
 
-            let status = match self.pane_content_cache.get(&pane_id) {
-                // Content changed since last tick → definitely working
-                Some(prev) if prev != &content => ClaudeCodeStatus::Working,
-                // Content unchanged → use static text check
-                Some(_) => detect_static_status(&content),
-                // No cached entry yet → fall back to full text detection
-                None => detect_status(&content),
+            let status = match pane_type {
+                PaneType::Ocli => detect_ocli_status(&content),
+                PaneType::Claude => match self.pane_content_cache.get(&pane_id) {
+                    // Content changed since last tick → definitely working
+                    Some(prev) if prev != &content => ClaudeCodeStatus::Working,
+                    // Content unchanged → use static text check
+                    Some(_) => detect_static_status(&content),
+                    // No cached entry yet → fall back to full text detection
+                    None => detect_status(&content),
+                },
             };
 
             self.sessions[idx].claude_code_status = status;
@@ -172,7 +197,7 @@ impl App {
     /// Refresh sessions without affecting messages (for use after git operations)
     fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
-        match Tmux::list_sessions() {
+        match Tmux::list_all_sessions(self.server_filter.as_deref()) {
             Ok(sessions) => {
                 self.sessions = sessions;
                 // Ensure selected index is still valid
@@ -238,7 +263,8 @@ impl App {
         self.clear_messages();
         if let Some(session) = self.selected_session() {
             let target = session.switch_target();
-            match Tmux::switch_to_session(&target) {
+            let server = session.server.clone();
+            match Tmux::switch_to_session(server.as_deref(), &target) {
                 Ok(_) => {
                     self.should_quit = true;
                 }
@@ -295,6 +321,15 @@ impl App {
 
     /// Compute available actions for the selected session
     fn compute_actions(&mut self) {
+        let pane_type = self.selected_session().map(|s| s.pane_type).unwrap_or_default();
+
+        if pane_type == PaneType::Ocli {
+            self.available_actions = vec![SessionAction::SwitchTo, SessionAction::Rename, SessionAction::Kill];
+            self.selected_action = 0;
+            self.pr_info = None;
+            return;
+        }
+
         // Extract data we need from the session first to avoid borrow conflicts
         let session_data = self.selected_session().map(|s| {
             (s.working_directory.clone(), s.git_context.clone())
@@ -414,10 +449,11 @@ impl App {
         };
         let session_name = session.name.clone();
         let switch_target = session.switch_target();
+        let server = session.server.clone();
 
         match action {
             SessionAction::SwitchTo => {
-                match Tmux::switch_to_session(&switch_target) {
+                match Tmux::switch_to_session(server.as_deref(), &switch_target) {
                     Ok(_) => self.should_quit = true,
                     Err(e) => self.error = Some(format!("Failed to switch: {}", e)),
                 }
@@ -545,7 +581,7 @@ impl App {
                         }
 
                         // Step 3: Kill the session
-                        match Tmux::kill_session(&session_name) {
+                        match Tmux::kill_session(server.as_deref(), &session_name) {
                             Ok(_) => {
                                 self.refresh_sessions();
                                 self.message = Some(if is_worktree {
@@ -568,7 +604,7 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Kill => {
-                match Tmux::kill_session(&session_name) {
+                match Tmux::kill_session(server.as_deref(), &session_name) {
                     Ok(_) => {
                         self.refresh_sessions();
                         self.message = Some(format!("Killed session '{}'", session_name));
@@ -586,7 +622,7 @@ impl App {
                 match GitContext::delete_worktree(&worktree_path, false) {
                     Ok(_) => {
                         // Then kill the session
-                        match Tmux::kill_session(&session_name) {
+                        match Tmux::kill_session(server.as_deref(), &session_name) {
                             Ok(_) => {
                                 self.refresh_sessions();
                                 self.message = Some(format!(
@@ -627,6 +663,7 @@ impl App {
 
     /// Confirm and execute session rename
     pub fn confirm_rename(&mut self) {
+        let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::Rename {
             ref old_name,
             ref new_name,
@@ -640,7 +677,7 @@ impl App {
                 return;
             }
 
-            match Tmux::rename_session(&old, &new) {
+            match Tmux::rename_session(server.as_deref(), &old, &new) {
                 Ok(_) => {
                     self.refresh_sessions();
                     self.message = Some(format!("Renamed '{}' to '{}'", old, new));
@@ -707,6 +744,7 @@ impl App {
 
     /// Create the new session
     pub fn confirm_new_session(&mut self, start_claude: bool) {
+        let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::NewSession {
             ref name, ref path, ..
         } = self.mode
@@ -720,7 +758,7 @@ impl App {
             let session_name = name.clone();
             let session_path = expand_path(path);
 
-            match Tmux::new_session(&session_name, &session_path, start_claude) {
+            match Tmux::new_session(server.as_deref(), &session_name, &session_path, start_claude) {
                 Ok(_) => {
                     self.refresh_sessions();
                     self.message = Some(format!("Created session '{}'", session_name));
@@ -859,6 +897,7 @@ impl App {
 
     /// Create the new worktree and session
     pub fn confirm_new_worktree(&mut self) {
+        let server = self.selected_session().and_then(|s| s.server.clone());
         let (source_repo, all_branches, branch_input, selected_branch, worktree_path, session_name) =
             if let Mode::NewWorktree {
                 ref source_repo,
@@ -942,7 +981,7 @@ impl App {
         ) {
             Ok(_) => {
                 // Create the session
-                match Tmux::new_session(&session_name, &worktree_path_buf, true) {
+                match Tmux::new_session(server.as_deref(), &session_name, &worktree_path_buf, true) {
                     Ok(_) => {
                         self.refresh_sessions();
                         self.message = Some(format!(

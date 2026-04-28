@@ -5,15 +5,76 @@ use anyhow::{Context, Result};
 
 use crate::detection::detect_status;
 use crate::git::GitContext;
-use crate::session::{ClaudeCodeStatus, Pane, Session};
+use crate::session::{ClaudeCodeStatus, Pane, PaneType, Session};
 
-/// Wrapper for tmux command execution
 pub struct Tmux;
 
+fn classify_pane_command(command: &str) -> Option<PaneType> {
+    if command == "claude" || command.contains("claude") {
+        Some(PaneType::Claude)
+    } else if command == "ops-cli" || command == "ocli" || command == "ops" || command.contains("ops-cli") {
+        Some(PaneType::Ocli)
+    } else {
+        None
+    }
+}
+
 impl Tmux {
-    /// List all tmux sessions with their metadata
-    pub fn list_sessions() -> Result<Vec<Session>> {
-        let output = Command::new("tmux")
+    fn cmd(server: Option<&str>) -> Command {
+        let mut cmd = Command::new("tmux");
+        if let Some(s) = server {
+            cmd.args(["-L", s]);
+        }
+        cmd
+    }
+
+    pub fn discover_servers() -> Vec<String> {
+        let uid = unsafe { libc::getuid() };
+        let socket_dir = PathBuf::from(format!("/tmp/tmux-{}", uid));
+        if !socket_dir.is_dir() {
+            return vec![];
+        }
+        let mut servers = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&socket_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if !name.starts_with('.') {
+                        servers.push(name.to_string());
+                    }
+                }
+            }
+        }
+        servers.sort();
+        servers
+    }
+
+    pub fn list_all_sessions(filter_server: Option<&str>) -> Result<Vec<Session>> {
+        let servers = match filter_server {
+            Some(s) => vec![s.to_string()],
+            None => Self::discover_servers(),
+        };
+
+        let mut all_sessions = Vec::new();
+
+        for server_name in &servers {
+            if let Ok(sessions) = Self::list_sessions(Some(server_name)) {
+                all_sessions.extend(sessions);
+            }
+        }
+
+        all_sessions.sort_by(|a, b| {
+            b.attached
+                .cmp(&a.attached)
+                .then_with(|| a.server.cmp(&b.server))
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.window_label.cmp(&b.window_label))
+        });
+
+        Ok(all_sessions)
+    }
+
+    pub fn list_sessions(server: Option<&str>) -> Result<Vec<Session>> {
+        let output = Self::cmd(server)
             .args([
                 "list-sessions",
                 "-F",
@@ -24,7 +85,6 @@ impl Tmux {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // No sessions is not an error for us
             if stderr.contains("no server running") || stderr.contains("no sessions") {
                 return Ok(Vec::new());
             }
@@ -33,6 +93,7 @@ impl Tmux {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut sessions = Vec::new();
+        let server_str = server.map(|s| s.to_string());
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
@@ -42,20 +103,16 @@ impl Tmux {
                 let attached = parts[2] == "1";
                 let window_count = parts[3].parse().unwrap_or(1);
 
-                // Get panes for this session
-                let panes = Self::list_panes(&name).unwrap_or_default();
+                let panes = Self::list_panes(server, &name).unwrap_or_default();
 
-                // Find every pane running claude
-                let claude_panes: Vec<&Pane> = panes
+                let detected_panes: Vec<(&Pane, PaneType)> = panes
                     .iter()
-                    .filter(|p| p.current_command == "claude" || p.current_command.contains("claude"))
+                    .filter_map(|p| classify_pane_command(&p.current_command).map(|t| (p, t)))
                     .collect();
 
-                // Emit one Session row per claude pane. Sessions with zero
-                // claude panes still produce a single row with no claude info.
-                let multi = claude_panes.len() > 1;
+                let multi = detected_panes.len() > 1;
 
-                if claude_panes.is_empty() {
+                if detected_panes.is_empty() {
                     let working_directory = panes
                         .first()
                         .map(|p| p.current_path.clone())
@@ -70,24 +127,26 @@ impl Tmux {
                         window_count,
                         panes: panes.clone(),
                         claude_code_pane: None,
+                        pane_type: PaneType::Claude,
                         claude_code_status: ClaudeCodeStatus::Unknown,
                         window_label: None,
                         target_window_index: None,
                         git_context,
+                        server: server_str.clone(),
                     });
                 } else {
-                    for claude_pane in claude_panes {
-                        let status = Self::capture_pane(&claude_pane.id, 15, true)
+                    for (detected_pane, pane_type) in detected_panes {
+                        let status = Self::capture_pane(server, &detected_pane.id, 15, true)
                             .map(|content| detect_status(&content))
                             .unwrap_or(ClaudeCodeStatus::Unknown);
 
-                        let working_directory = claude_pane.current_path.clone();
+                        let working_directory = detected_pane.current_path.clone();
                         let git_context = GitContext::detect(&working_directory);
 
                         let (window_label, target_window_index) = if multi {
                             (
-                                Some(claude_pane.window_name.clone()),
-                                Some(claude_pane.window_index.clone()),
+                                Some(detected_pane.window_name.clone()),
+                                Some(detected_pane.window_index.clone()),
                             )
                         } else {
                             (None, None)
@@ -100,19 +159,19 @@ impl Tmux {
                             working_directory,
                             window_count,
                             panes: panes.clone(),
-                            claude_code_pane: Some(claude_pane.id.clone()),
+                            claude_code_pane: Some(detected_pane.id.clone()),
+                            pane_type,
                             claude_code_status: status,
                             window_label,
                             target_window_index,
                             git_context,
+                            server: server_str.clone(),
                         });
                     }
                 }
             }
         }
 
-        // Sort by attached status, then name, then window label so the rows
-        // for a multi-claude session stay grouped in a stable order.
         sessions.sort_by(|a, b| {
             b.attached
                 .cmp(&a.attached)
@@ -123,9 +182,8 @@ impl Tmux {
         Ok(sessions)
     }
 
-    /// List all panes in a session, across every window
-    fn list_panes(session: &str) -> Result<Vec<Pane>> {
-        let output = Command::new("tmux")
+    fn list_panes(server: Option<&str>, session: &str) -> Result<Vec<Pane>> {
+        let output = Self::cmd(server)
             .args([
                 "list-panes",
                 "-s",
@@ -160,22 +218,15 @@ impl Tmux {
         Ok(panes)
     }
 
-    /// Capture the last N lines of a pane's content
-    ///
-    /// If `strip_empty` is true, empty lines are filtered out before taking the last N.
-    /// This is useful for status detection. For preview display, use `strip_empty: false`
-    /// to preserve the visual layout.
-    ///
-    /// ANSI escape sequences are always included - the UI handles rendering them.
-    pub fn capture_pane(pane_id: &str, lines: usize, strip_empty: bool) -> Result<String> {
-        let output = Command::new("tmux")
+    pub fn capture_pane(server: Option<&str>, pane_id: &str, lines: usize, strip_empty: bool) -> Result<String> {
+        let output = Self::cmd(server)
             .args([
                 "capture-pane",
                 "-t",
                 pane_id,
-                "-p", // Print to stdout
-                "-J", // Join wrapped lines
-                "-e", // Include escape sequences
+                "-p",
+                "-J",
+                "-e",
             ])
             .output()
             .context("Failed to capture pane")?;
@@ -187,22 +238,17 @@ impl Tmux {
         let content = String::from_utf8_lossy(&output.stdout);
 
         if strip_empty {
-            // Filter out empty lines, then get last N (for status detection)
             let non_empty: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
             let start = non_empty.len().saturating_sub(lines);
             let last_lines = &non_empty[start..];
             Ok(last_lines.join("\n"))
         } else {
-            // Preserve internal empty lines but trim trailing ones (for preview display)
             let all_lines: Vec<&str> = content.lines().collect();
-
-            // Find last non-empty line
             let last_non_empty = all_lines
                 .iter()
                 .rposition(|l| !l.trim().is_empty())
                 .map(|i| i + 1)
                 .unwrap_or(0);
-
             let trimmed = &all_lines[..last_non_empty];
             let start = trimmed.len().saturating_sub(lines);
             let last_lines = &trimmed[start..];
@@ -210,9 +256,8 @@ impl Tmux {
         }
     }
 
-    /// Switch the current client to the specified session
-    pub fn switch_to_session(session: &str) -> Result<()> {
-        let status = Command::new("tmux")
+    pub fn switch_to_session(server: Option<&str>, session: &str) -> Result<()> {
+        let status = Self::cmd(server)
             .args(["switch-client", "-t", session])
             .status()
             .context("Failed to switch session")?;
@@ -224,11 +269,10 @@ impl Tmux {
         Ok(())
     }
 
-    /// Create a new tmux session
-    pub fn new_session(name: &str, path: &std::path::Path, start_claude: bool) -> Result<()> {
+    pub fn new_session(server: Option<&str>, name: &str, path: &std::path::Path, start_claude: bool) -> Result<()> {
         let path_str = path.to_string_lossy();
 
-        let status = Command::new("tmux")
+        let status = Self::cmd(server)
             .args(["new-session", "-d", "-s", name, "-c", &path_str])
             .status()
             .context("Failed to create new session")?;
@@ -238,8 +282,7 @@ impl Tmux {
         }
 
         if start_claude {
-            // Send claude command to the new session
-            let _ = Command::new("tmux")
+            let _ = Self::cmd(server)
                 .args(["send-keys", "-t", name, "claude", "Enter"])
                 .status();
         }
@@ -247,9 +290,8 @@ impl Tmux {
         Ok(())
     }
 
-    /// Kill a tmux session
-    pub fn kill_session(session: &str) -> Result<()> {
-        let status = Command::new("tmux")
+    pub fn kill_session(server: Option<&str>, session: &str) -> Result<()> {
+        let status = Self::cmd(server)
             .args(["kill-session", "-t", session])
             .status()
             .context("Failed to kill session")?;
@@ -261,9 +303,8 @@ impl Tmux {
         Ok(())
     }
 
-    /// Rename a tmux session
-    pub fn rename_session(old_name: &str, new_name: &str) -> Result<()> {
-        let status = Command::new("tmux")
+    pub fn rename_session(server: Option<&str>, old_name: &str, new_name: &str) -> Result<()> {
+        let status = Self::cmd(server)
             .args(["rename-session", "-t", old_name, new_name])
             .status()
             .context("Failed to rename session")?;
@@ -275,9 +316,8 @@ impl Tmux {
         Ok(())
     }
 
-    /// Get the name of the currently attached session
-    pub fn current_session() -> Result<Option<String>> {
-        let output = Command::new("tmux")
+    pub fn current_session(server: Option<&str>) -> Result<Option<String>> {
+        let output = Self::cmd(server)
             .args(["display-message", "-p", "#{session_name}"])
             .output()
             .context("Failed to get current session")?;
@@ -292,5 +332,37 @@ impl Tmux {
         } else {
             Ok(Some(name))
         }
+    }
+
+    pub fn new_window(
+        server: Option<&str>,
+        session: &str,
+        window_name: &str,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let path_str = path.to_string_lossy();
+        let status = Self::cmd(server)
+            .args(["new-window", "-t", session, "-n", window_name, "-c", &path_str])
+            .status()
+            .context("Failed to create new window")?;
+        if !status.success() {
+            anyhow::bail!("Failed to create window '{}' in session '{}'", window_name, session);
+        }
+        Ok(())
+    }
+
+    pub fn send_keys(
+        server: Option<&str>,
+        target: &str,
+        keys: &str,
+    ) -> Result<()> {
+        let status = Self::cmd(server)
+            .args(["send-keys", "-t", target, keys, "Enter"])
+            .status()
+            .context("Failed to send keys")?;
+        if !status.success() {
+            anyhow::bail!("Failed to send keys to '{}'", target);
+        }
+        Ok(())
     }
 }

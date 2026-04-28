@@ -54,6 +54,22 @@ fn has_input_field(content: &str) -> bool {
     false
 }
 
+pub fn detect_ocli_status(content: &str) -> ClaudeCodeStatus {
+    if content.contains("Select") || content.contains("❯") || content.contains("Choose") {
+        return ClaudeCodeStatus::Idle;
+    }
+
+    if content.contains("Deploying") || content.contains("Tailing") || content.contains("Loading") || content.contains("Fetching") {
+        return ClaudeCodeStatus::Working;
+    }
+
+    if content.contains("[y/n]") || content.contains("[Y/n]") || content.contains("Confirm") {
+        return ClaudeCodeStatus::WaitingInput;
+    }
+
+    ClaudeCodeStatus::Unknown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
