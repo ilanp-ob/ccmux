@@ -202,41 +202,68 @@ impl App {
             (branch.clone(), false)
         };
 
-        match GitContext::create_worktree(&source_repo, &worktree_path, &local_branch, actually_new) {
-            Ok(_) => {
-                let current_session = Tmux::current_session(server.as_deref())
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "default".to_string());
+        // If the path already exists, check whether it's an existing worktree we can reuse.
+        let already_exists = worktree_path.exists();
+        let worktree_ok = if already_exists {
+            let is_worktree = git2::Repository::discover(&worktree_path)
+                .map(|r| r.is_worktree())
+                .unwrap_or(false);
+            if is_worktree {
+                self.message = Some(format!("Attaching to existing worktree '{}'", folder));
+                true
+            } else {
+                self.error = Some(format!(
+                    "Path '{}' already exists and is not a git worktree",
+                    worktree_path.display()
+                ));
+                false
+            }
+        } else {
+            match GitContext::create_worktree(&source_repo, &worktree_path, &local_branch, actually_new) {
+                Ok(_) => true,
+                Err(e) => {
+                    self.error = Some(format!("Failed to create worktree: {}", e));
+                    false
+                }
+            }
+        };
 
-                match Tmux::new_window(server.as_deref(), &current_session, &folder, &worktree_path) {
-                    Ok(_) => {
-                        let target = format!("{}:{}", current_session, folder);
+        if worktree_ok {
+            let current_session = Tmux::current_session(server.as_deref())
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "default".to_string());
 
-                        if launch_claude {
-                            let model = AVAILABLE_MODELS[model_index];
-                            let effort = AVAILABLE_EFFORTS[effort_index];
-                            let alias = &self.config.claude.alias;
-                            let cmd = format!("{} --model {} --effort {}", alias, model, effort);
-                            let _ = Tmux::send_keys(server.as_deref(), &target, &cmd);
-                        }
+            match Tmux::new_window(server.as_deref(), &current_session, &folder, &worktree_path) {
+                Ok(_) => {
+                    let target = format!("{}:{}", current_session, folder);
 
-                        self.refresh_sessions();
+                    if launch_claude {
+                        let model = AVAILABLE_MODELS[model_index];
+                        let effort = AVAILABLE_EFFORTS[effort_index];
+                        let alias = &self.config.claude.alias;
+                        let safe_name = folder.replace('\'', "'\\''");
+                        let cmd = format!(
+                            "{} --model {} --effort {} --name '{}'",
+                            alias, model, effort, safe_name
+                        );
+                        let _ = Tmux::send_keys(server.as_deref(), &target, &cmd);
+                    }
+
+                    self.refresh_sessions();
+                    if !already_exists {
                         self.message = Some(format!(
                             "Created worktree '{}' in window '{}'",
                             local_branch, folder
                         ));
                     }
-                    Err(e) => {
-                        self.error = Some(format!(
-                            "Worktree created but failed to create window: {}",
-                            e
-                        ));
-                    }
                 }
-            }
-            Err(e) => {
-                self.error = Some(format!("Failed to create worktree: {}", e));
+                Err(e) => {
+                    self.error = Some(format!(
+                        "Worktree ready but failed to create window: {}",
+                        e
+                    ));
+                }
             }
         }
 

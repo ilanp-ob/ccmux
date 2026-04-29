@@ -288,8 +288,9 @@ impl Tmux {
             .status();
 
         if start_claude {
+            let claude_cmd = format!("claude --name '{}'", name.replace('\'', "'\\''"));
             let _ = Self::cmd(server)
-                .args(["send-keys", "-t", name, "claude", "Enter"])
+                .args(["send-keys", "-t", name, &claude_cmd, "Enter"])
                 .status();
         }
 
