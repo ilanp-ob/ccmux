@@ -734,10 +734,8 @@ impl App {
     /// Start the new session flow
     pub fn start_new_session(&mut self) {
         self.clear_messages();
-        // Default to current directory
-        let default_path = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "~".to_string());
+        // Default to the configured base_dir so the user lands near their projects
+        let default_path = self.config.worktree.base_dir.clone();
 
         // Get initial path suggestions
         let completion = crate::completion::complete_path(&default_path);
@@ -783,12 +781,13 @@ impl App {
 
             match Tmux::new_window(server.as_deref(), &current_session, &window_name, &window_path) {
                 Ok(_) => {
+                    let target = format!("{}:{}", current_session, window_name);
                     if start_claude {
-                        let target = format!("{}:{}", current_session, window_name);
                         let _ = Tmux::send_keys(server.as_deref(), &target, "claude");
                     }
-                    self.refresh_sessions();
-                    self.message = Some(format!("Created window '{}'", window_name));
+                    // Switch the outer session to the new window before closing the popup
+                    let _ = Tmux::select_window(server.as_deref(), &target);
+                    self.should_quit = true;
                 }
                 Err(e) => {
                     self.error = Some(format!("Failed to create window: {}", e));
