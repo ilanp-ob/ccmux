@@ -191,7 +191,12 @@ impl App {
         let source_repo = self.worktree_flow_source_repo.take().unwrap_or_default();
         let _server_unused = self.worktree_flow_server.take();
         let server = self.managed_server.clone();
-        let base_dir = expand_path(&self.config.worktree.base_dir);
+        // Place worktrees as siblings of the main repo (parent dir), falling
+        // back to config base_dir if the parent can't be determined.
+        let base_dir = source_repo
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| expand_path(&self.config.worktree.base_dir));
         let worktree_path = base_dir.join(&folder);
 
         let (local_branch, actually_new) = if is_new_branch {
