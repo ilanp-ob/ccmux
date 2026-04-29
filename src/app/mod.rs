@@ -751,11 +751,15 @@ impl App {
         };
     }
 
-    /// Create the new session
+    /// Create a new tmux window (within the current session) for a Claude Code instance
     pub fn confirm_new_session(&mut self, start_claude: bool) {
         let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::NewSession {
-            ref name, ref path, ..
+            ref name,
+            ref path,
+            ref path_suggestions,
+            ref path_selected,
+            ..
         } = self.mode
         {
             if name.is_empty() {
@@ -764,16 +768,30 @@ impl App {
                 return;
             }
 
-            let session_name = name.clone();
-            let session_path = expand_path(path);
+            let window_name = name.clone();
+            // Use highlighted suggestion if one is selected, otherwise use typed path
+            let actual_path = path_selected
+                .and_then(|idx| path_suggestions.get(idx))
+                .cloned()
+                .unwrap_or_else(|| path.clone());
+            let window_path = expand_path(&actual_path);
 
-            match Tmux::new_session(server.as_deref(), &session_name, &session_path, start_claude) {
+            let current_session = Tmux::current_session(server.as_deref())
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "main".to_string());
+
+            match Tmux::new_window(server.as_deref(), &current_session, &window_name, &window_path) {
                 Ok(_) => {
+                    if start_claude {
+                        let target = format!("{}:{}", current_session, window_name);
+                        let _ = Tmux::send_keys(server.as_deref(), &target, "claude");
+                    }
                     self.refresh_sessions();
-                    self.message = Some(format!("Created session '{}'", session_name));
+                    self.message = Some(format!("Created window '{}'", window_name));
                 }
                 Err(e) => {
-                    self.error = Some(format!("Failed to create session: {}", e));
+                    self.error = Some(format!("Failed to create window: {}", e));
                 }
             }
         }

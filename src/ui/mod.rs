@@ -306,7 +306,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(" "),
             Span::styled(
                 format!("{:<8}", status.label()),
-                Style::default().fg(status_color),
+                if *status == ClaudeCodeStatus::WaitingInput {
+                    Style::default().fg(status_color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(status_color)
+                },
             ),
             Span::raw("  "),
             Span::styled(session.display_path(), Style::default().fg(path_color)),

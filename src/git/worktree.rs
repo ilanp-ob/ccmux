@@ -37,90 +37,46 @@ impl GitContext {
         Ok(branches)
     }
 
-    /// Create a new worktree for a branch
+    /// Create a new worktree for a branch using the git CLI.
     /// - If `is_new_branch` is true: creates a new branch from HEAD
-    /// - If `is_new_branch` is false: uses an existing branch
+    /// - If `is_new_branch` is false: checks out an existing branch
     pub fn create_worktree(
         repo_path: &Path,
         worktree_path: &Path,
         branch_name: &str,
         is_new_branch: bool,
     ) -> Result<()> {
-        let repo = Repository::discover(repo_path).context("Failed to open repository")?;
-
-        // Sanitize branch name for worktree name (remove slashes)
-        let worktree_name = branch_name.replace('/', "-");
-
-        // Check if worktree path already exists
         if worktree_path.exists() {
             anyhow::bail!("Path '{}' already exists", worktree_path.display());
         }
 
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(repo_path);
+        cmd.arg("worktree").arg("add");
+
         if is_new_branch {
-            // Create new branch from HEAD, then create worktree
-            let head = repo.head().context("Failed to get HEAD")?;
-            let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
-
-            // Create the branch first
-            repo.branch(branch_name, &commit, false)
-                .with_context(|| format!("Failed to create branch '{}'", branch_name))?;
-
-            // Now create the worktree for this branch
-            let refname = format!("refs/heads/{}", branch_name);
-            let reference = repo
-                .find_reference(&refname)
-                .context("Failed to find created branch")?;
-
-            repo.worktree(
-                &worktree_name,
-                worktree_path,
-                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to create worktree for new branch '{}' at '{}'",
-                    branch_name,
-                    worktree_path.display()
-                )
-            })?;
-        } else {
-            // Branch exists - create worktree for existing branch
-            let refname = format!("refs/heads/{}", branch_name);
-            let reference = repo
-                .find_reference(&refname)
-                .with_context(|| format!("Branch '{}' not found", branch_name))?;
-
-            // Check if this branch is already checked out
-            if let Ok(head) = repo.head() {
-                if head.is_branch() {
-                    if let Some(head_name) = head.shorthand() {
-                        if head_name == branch_name {
-                            anyhow::bail!(
-                                "Branch '{}' is currently checked out in the main worktree. \
-                                 Create a new branch instead, or checkout a different branch first.",
-                                branch_name
-                            );
-                        }
-                    }
-                }
-            }
-
-            repo.worktree(
-                &worktree_name,
-                worktree_path,
-                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to create worktree for branch '{}' at '{}'. \
-                     The branch may already be checked out in another worktree.",
-                    branch_name,
-                    worktree_path.display()
-                )
-            })?;
+            cmd.arg("-b").arg(branch_name);
         }
 
-        Ok(())
+        cmd.arg(worktree_path);
+
+        if !is_new_branch {
+            cmd.arg(branch_name);
+        }
+
+        let output = cmd.output().context("Failed to execute git worktree add")?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "Failed to create worktree for '{}' at '{}': {}",
+                branch_name,
+                worktree_path.display(),
+                stderr.trim()
+            )
+        }
     }
 
     /// List all branches (local + remote), with remote branches prefixed by their remote name.
