@@ -121,6 +121,7 @@ impl Tmux {
 
                     sessions.push(Session {
                         name: name.clone(),
+                        window_id: String::new(),
                         created,
                         attached,
                         working_directory,
@@ -154,6 +155,7 @@ impl Tmux {
 
                         sessions.push(Session {
                             name: name.clone(),
+                            window_id: String::new(),
                             created,
                             attached,
                             working_directory,
@@ -341,29 +343,211 @@ impl Tmux {
         }
     }
 
+    /// Create a new window and return its window ID (e.g. "@5").
+    /// Using the ID for subsequent send-keys avoids automatic-rename race conditions.
     pub fn new_window(
         server: Option<&str>,
         session: &str,
         window_name: &str,
         path: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let path_str = path.to_string_lossy();
-        let status = Self::cmd(server)
-            .args(["new-window", "-t", session, "-n", window_name, "-c", &path_str])
-            .status()
+        let output = Self::cmd(server)
+            .args([
+                "new-window", "-t", session, "-n", window_name, "-c", &path_str,
+                "-P", "-F", "#{window_id}",
+            ])
+            .output()
             .context("Failed to create new window")?;
-        if !status.success() {
+        if !output.status.success() {
             anyhow::bail!("Failed to create window '{}' in session '{}'", window_name, session);
         }
-        // tmux's `default-command "cd ~ && exec $SHELL"` overrides -c, so cd explicitly.
+        let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // tmux's `default-command "cd ~ && exec $SHELL"` overrides -c; target by
+        // window_id so the send-keys lands even after automatic-rename.
         let cd_cmd = format!("cd '{}'", path_str.replace('\'', "'\\''"));
-        let target = format!("{}:{}", session, window_name);
         let _ = Self::cmd(server)
-            .args(["send-keys", "-t", &target, &cd_cmd, "Enter"])
+            .args(["send-keys", "-t", &window_id, &cd_cmd, "Enter"])
             .status();
+        Ok(window_id)
+    }
+
+    pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
+        let status = Self::cmd(server)
+            .args(["kill-window", "-t", target])
+            .status()
+            .context("Failed to kill window")?;
+        if !status.success() {
+            anyhow::bail!("Failed to kill window {}", target);
+        }
         Ok(())
     }
 
+    pub fn rename_window(server: Option<&str>, target: &str, new_name: &str) -> Result<()> {
+        let status = Self::cmd(server)
+            .args(["rename-window", "-t", target, new_name])
+            .status()
+            .context("Failed to rename window")?;
+        if !status.success() {
+            anyhow::bail!("Failed to rename window to {}", new_name);
+        }
+        Ok(())
+    }
+
+    /// List windows in `session_name` as `Session` structs.
+    /// Windows whose ID equals `exclude_window_id` are skipped (used to hide
+    /// the ccmux window itself from the list).
+    pub fn list_windows_as_sessions(
+        server: Option<&str>,
+        session_name: &str,
+        exclude_window_id: Option<&str>,
+    ) -> Result<Vec<crate::session::Session>> {
+        use crate::session::{ClaudeCodeStatus, Session};
+
+        let output = Self::cmd(server)
+            .args([
+                "list-windows",
+                "-t", session_name,
+                "-F", "#{window_id}\t#{window_name}\t#{window_active}\t#{window_activity}\t#{window_index}",
+            ])
+            .output()
+            .context("Failed to list windows")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("no server running")
+                || stderr.contains("can't find session")
+                || stderr.contains("no such session")
+            {
+                return Ok(Vec::new());
+            }
+            anyhow::bail!("tmux list-windows failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let server_str = server.map(|s| s.to_string());
+        let mut sessions = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let window_id = parts[0].to_string();
+            let window_name = parts[1].to_string();
+            let active = parts[2] == "1";
+            let activity: i64 = parts[3].parse().unwrap_or(0);
+            let window_index = parts[4].to_string();
+
+            if exclude_window_id.is_some_and(|excl| excl == window_id) {
+                continue;
+            }
+
+            let pane_target = format!("{}:{}", session_name, window_index);
+            let panes = Self::list_panes_in_window(server, &pane_target).unwrap_or_default();
+
+            // Extract what we need from the detected pane BEFORE moving `panes`
+            let detected = panes.iter().find_map(|p| {
+                classify_pane_command(&p.current_command).map(|t| {
+                    (p.id.clone(), t, p.current_path.clone())
+                })
+            });
+
+            if let Some((pane_id, pane_type, pane_path)) = detected {
+                let status = Self::capture_pane(server, &pane_id, 15, true)
+                    .map(|content| detect_status(&content))
+                    .unwrap_or(ClaudeCodeStatus::Unknown);
+
+                let git_context = GitContext::detect(&pane_path);
+
+                sessions.push(Session {
+                    name: window_name,
+                    window_id,
+                    created: activity,
+                    attached: active,
+                    working_directory: pane_path,
+                    window_count: 1,
+                    panes,
+                    claude_code_pane: Some(pane_id),
+                    pane_type,
+                    claude_code_status: status,
+                    window_label: None,
+                    target_window_index: Some(window_index),
+                    git_context,
+                    server: server_str.clone(),
+                });
+            } else {
+                let working_directory = panes.first().map(|p| p.current_path.clone()).unwrap_or_default();
+                let git_context = GitContext::detect(&working_directory);
+
+                sessions.push(Session {
+                    name: window_name,
+                    window_id,
+                    created: activity,
+                    attached: active,
+                    working_directory,
+                    window_count: 1,
+                    panes,
+                    claude_code_pane: None,
+                    pane_type: PaneType::Claude,
+                    claude_code_status: ClaudeCodeStatus::Unknown,
+                    window_label: None,
+                    target_window_index: Some(window_index),
+                    git_context,
+                    server: server_str.clone(),
+                });
+            }
+        }
+
+        Ok(sessions)
+    }
+
+    /// List panes in a specific window (`target` = `session:window_index`).
+    fn list_panes_in_window(server: Option<&str>, target: &str) -> Result<Vec<Pane>> {
+        let output = Self::cmd(server)
+            .args([
+                "list-panes",
+                "-t", target,
+                "-F",
+                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{window_name}",
+            ])
+            .output()
+            .context("Failed to list panes")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut panes = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 5 {
+                panes.push(Pane {
+                    id: parts[0].to_string(),
+                    current_command: parts[1].to_string(),
+                    current_path: PathBuf::from(parts[2]),
+                    window_index: parts[3].to_string(),
+                    window_name: parts[4].to_string(),
+                });
+            }
+        }
+
+        Ok(panes)
+    }
+
+    /// Return the window ID of the pane ccmux is running in, used to exclude
+    /// ccmux's own window from the listed sessions.
+    pub fn own_window_id(server: Option<&str>) -> Option<String> {
+        let pane_id = std::env::var("TMUX_PANE").ok()?;
+        let output = Self::cmd(server)
+            .args(["display-message", "-t", &pane_id, "-p", "#{window_id}"])
+            .output()
+            .ok()?;
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if id.is_empty() { None } else { Some(id) }
+    }
 
     pub fn send_keys(
         server: Option<&str>,

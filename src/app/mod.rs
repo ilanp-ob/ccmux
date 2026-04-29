@@ -34,7 +34,7 @@ use helpers::{default_worktree_path, sanitize_for_session_name};
 
 /// Main application state
 pub struct App {
-    /// All discovered sessions
+    /// All discovered windows (listed as Sessions for UI compatibility)
     pub sessions: Vec<Session>,
     /// Currently selected index
     pub selected: usize,
@@ -42,7 +42,7 @@ pub struct App {
     pub mode: Mode,
     /// Whether the app should quit
     pub should_quit: bool,
-    /// Name of the currently attached session (if any)
+    /// Name of the managed tmux session
     pub current_session: Option<String>,
     /// Filter text for filtering sessions
     pub filter: String,
@@ -68,8 +68,12 @@ pub struct App {
     last_status_tick: Instant,
     /// Application configuration
     pub config: crate::config::Config,
-    /// Optional server filter (--server CLI flag)
-    pub server_filter: Option<String>,
+    /// Tmux session whose windows ccmux manages
+    pub managed_session: String,
+    /// Tmux server for the managed session (None = default server)
+    pub managed_server: Option<String>,
+    /// Window ID of ccmux's own window — excluded from the list
+    pub own_window_id: Option<String>,
     /// Source repo path for worktree flow
     pub worktree_flow_source_repo: Option<std::path::PathBuf>,
     /// Server name for worktree flow
@@ -81,19 +85,31 @@ impl App {
     // Initialization and core lifecycle
     // =========================================================================
 
-    /// Create a new App instance
-    pub fn new(server_filter: Option<String>, config: crate::config::Config) -> Result<Self> {
-        let sessions = Tmux::list_all_sessions(server_filter.as_deref())?;
-        let current_session = {
-            let servers = Tmux::discover_servers();
-            let mut found = None;
-            for s in &servers {
-                if let Ok(Some(name)) = Tmux::current_session(Some(s)) {
-                    found = Some(name);
-                    break;
-                }
-            }
-            found
+    /// Create a new App instance.
+    /// `server` optionally specifies which tmux server to connect to.
+    pub fn new(server: Option<String>, config: crate::config::Config) -> Result<Self> {
+        let managed_session = Tmux::current_session(server.as_deref())
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+        let own_window_id = Tmux::own_window_id(server.as_deref());
+
+        let sessions = if managed_session.is_empty() {
+            Vec::new()
+        } else {
+            Tmux::list_windows_as_sessions(
+                server.as_deref(),
+                &managed_session,
+                own_window_id.as_deref(),
+            )
+            .unwrap_or_default()
+        };
+
+        let error = if managed_session.is_empty() {
+            Some("Not running inside tmux. Launch ccmux from within a tmux session.".to_string())
+        } else {
+            None
         };
 
         let mut app = Self {
@@ -101,9 +117,9 @@ impl App {
             selected: 0,
             mode: Mode::Normal,
             should_quit: false,
-            current_session,
+            current_session: Some(managed_session.clone()),
             filter: String::new(),
-            error: None,
+            error,
             message: None,
             preview_content: None,
             available_actions: Vec::new(),
@@ -114,7 +130,9 @@ impl App {
             pane_content_cache: HashMap::new(),
             last_status_tick: Instant::now(),
             config,
-            server_filter,
+            managed_session,
+            managed_server: server,
+            own_window_id,
             worktree_flow_source_repo: None,
             worktree_flow_server: None,
         };
@@ -203,41 +221,19 @@ impl App {
         }
     }
 
-    /// Cycle the server filter forward (dir=1) or backward (dir=-1).
-    /// Cycles: all → server1 → server2 → … → all
-    pub fn cycle_server_filter(&mut self, dir: i32) {
-        let mut servers = Tmux::discover_servers();
-        servers.sort();
-
-        // Build the ordered list: None (all), then each server
-        // Find current index
-        let current_idx = match &self.server_filter {
-            None => 0,
-            Some(s) => servers.iter().position(|x| x == s).map(|i| i + 1).unwrap_or(0),
-        };
-
-        let total = servers.len() + 1; // 0 = all, 1..N = servers
-        let next_idx = ((current_idx as i32 + dir).rem_euclid(total as i32)) as usize;
-
-        self.server_filter = if next_idx == 0 {
-            None
-        } else {
-            servers.into_iter().nth(next_idx - 1)
-        };
-
-        let label = self.server_filter.clone().unwrap_or_else(|| "all".to_string());
-        self.message = Some(format!("Server: {}", label));
-        self.selected = 0;
-        self.refresh_sessions();
-    }
-
-    /// Refresh sessions without affecting messages (for use after git operations)
+    /// Refresh the window list (for use after git/tmux operations)
     pub(crate) fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
-        match Tmux::list_all_sessions(self.server_filter.as_deref()) {
+        if self.managed_session.is_empty() {
+            return false;
+        }
+        match Tmux::list_windows_as_sessions(
+            self.managed_server.as_deref(),
+            &self.managed_session,
+            self.own_window_id.as_deref(),
+        ) {
             Ok(sessions) => {
                 self.sessions = sessions;
-                // Ensure selected index is still valid
                 if self.selected >= self.sessions.len() && !self.sessions.is_empty() {
                     self.selected = self.sessions.len() - 1;
                 }
@@ -485,6 +481,7 @@ impl App {
             return;
         };
         let session_name = session.name.clone();
+        let window_id = session.window_id.clone();
         let switch_target = session.switch_target();
         let server = session.server.clone();
 
@@ -617,20 +614,20 @@ impl App {
                             }
                         }
 
-                        // Step 3: Kill the session
-                        match Tmux::kill_session(server.as_deref(), &session_name) {
+                        // Step 3: Kill the window
+                        match Tmux::kill_window(server.as_deref(), &window_id) {
                             Ok(_) => {
                                 self.refresh_sessions();
                                 self.message = Some(if is_worktree {
-                                    "Merged PR, removed worktree, and closed session".to_string()
+                                    "Merged PR, removed worktree, and closed window".to_string()
                                 } else {
-                                    "Merged PR and closed session".to_string()
+                                    "Merged PR and closed window".to_string()
                                 });
                             }
                             Err(e) => {
                                 self.refresh_sessions();
                                 self.error = Some(format!(
-                                    "PR merged but failed to kill session: {}",
+                                    "PR merged but failed to kill window: {}",
                                     e
                                 ));
                             }
@@ -641,10 +638,10 @@ impl App {
                 self.mode = Mode::Normal;
             }
             SessionAction::Kill => {
-                match Tmux::kill_session(server.as_deref(), &session_name) {
+                match Tmux::kill_window(server.as_deref(), &window_id) {
                     Ok(_) => {
                         self.refresh_sessions();
-                        self.message = Some(format!("Killed session '{}'", session_name));
+                        self.message = Some(format!("Killed window '{}'", session_name));
                     }
                     Err(e) => self.error = Some(format!("Failed to kill: {}", e)),
                 }
@@ -655,22 +652,20 @@ impl App {
             }
             SessionAction::KillAndDeleteWorktree => {
                 let worktree_path = session.working_directory.clone();
-                // First delete the worktree (while session still provides git context)
                 match GitContext::delete_worktree(&worktree_path, false) {
                     Ok(_) => {
-                        // Then kill the session
-                        match Tmux::kill_session(server.as_deref(), &session_name) {
+                        match Tmux::kill_window(server.as_deref(), &window_id) {
                             Ok(_) => {
                                 self.refresh_sessions();
                                 self.message = Some(format!(
-                                    "Deleted worktree and killed session '{}'",
+                                    "Deleted worktree and killed window '{}'",
                                     session_name
                                 ));
                             }
                             Err(e) => {
                                 self.refresh_sessions();
                                 self.error = Some(format!(
-                                    "Worktree deleted but failed to kill session: {}",
+                                    "Worktree deleted but failed to kill window: {}",
                                     e
                                 ));
                             }
@@ -698,9 +693,12 @@ impl App {
         }
     }
 
-    /// Confirm and execute session rename
+    /// Confirm and execute window rename
     pub fn confirm_rename(&mut self) {
-        let server = self.selected_session().and_then(|s| s.server.clone());
+        let (server, window_id) = self
+            .selected_session()
+            .map(|s| (s.server.clone(), s.window_id.clone()))
+            .unwrap_or_default();
         if let Mode::Rename {
             ref old_name,
             ref new_name,
@@ -714,7 +712,7 @@ impl App {
                 return;
             }
 
-            match Tmux::rename_session(server.as_deref(), &old, &new) {
+            match Tmux::rename_window(server.as_deref(), &window_id, &new) {
                 Ok(_) => {
                     self.refresh_sessions();
                     self.message = Some(format!("Renamed '{}' to '{}'", old, new));
@@ -781,9 +779,8 @@ impl App {
         };
     }
 
-    /// Create a new named tmux session and switch to it (closing this popup)
+    /// Create a new tmux window and optionally switch to it
     pub fn confirm_new_session(&mut self) {
-        let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::NewSession {
             ref name,
             ref path,
@@ -795,33 +792,41 @@ impl App {
         } = self.mode
         {
             if name.is_empty() {
-                self.error = Some("Session name cannot be empty".to_string());
+                self.error = Some("Window name cannot be empty".to_string());
                 self.mode = Mode::Normal;
                 return;
             }
 
-            let session_name = name.clone();
+            let window_name = name.clone();
             let do_claude = launch_claude;
             let do_switch = switch_on_create;
-            // Use highlighted suggestion if one is selected, otherwise use the typed path
             let actual_path = path_selected
                 .and_then(|idx| path_suggestions.get(idx))
                 .cloned()
                 .unwrap_or_else(|| path.clone());
-            let session_path = expand_path(&actual_path);
+            let window_path = expand_path(&actual_path);
 
-            match Tmux::new_session(server.as_deref(), &session_name, &session_path, do_claude) {
-                Ok(_) => {
+            let managed_session = self.managed_session.clone();
+            let managed_server = self.managed_server.clone();
+            let alias = self.config.claude.alias.clone();
+
+            match Tmux::new_window(managed_server.as_deref(), &managed_session, &window_name, &window_path) {
+                Ok(window_id) => {
+                    if do_claude {
+                        let safe_name = window_name.replace('\'', "'\\''");
+                        let claude_cmd = format!("{} --name '{}'", alias, safe_name);
+                        let _ = Tmux::send_keys(managed_server.as_deref(), &window_id, &claude_cmd);
+                    }
                     if do_switch {
-                        let _ = Tmux::switch_to_session(server.as_deref(), &session_name);
+                        let _ = Tmux::switch_to_session(managed_server.as_deref(), &window_id);
                         self.should_quit = true;
                     } else {
                         self.refresh_sessions();
-                        self.message = Some(format!("Created session '{}'", session_name));
+                        self.message = Some(format!("Created window '{}'", window_name));
                     }
                 }
                 Err(e) => {
-                    self.error = Some(format!("Failed to create session: {}", e));
+                    self.error = Some(format!("Failed to create window: {}", e));
                 }
             }
         }
@@ -952,9 +957,8 @@ impl App {
         }
     }
 
-    /// Create the new worktree and session
+    /// Create the new worktree and window
     pub fn confirm_new_worktree(&mut self) {
-        let server = self.selected_session().and_then(|s| s.server.clone());
         let (source_repo, all_branches, branch_input, selected_branch, worktree_path, session_name) =
             if let Mode::NewWorktree {
                 ref source_repo,
@@ -1029,6 +1033,10 @@ impl App {
 
         let worktree_path_buf = expand_path(&worktree_path);
 
+        let managed_session = self.managed_session.clone();
+        let managed_server = self.managed_server.clone();
+        let alias = self.config.claude.alias.clone();
+
         // Create the worktree
         match GitContext::create_worktree(
             &source_repo,
@@ -1037,18 +1045,20 @@ impl App {
             is_new_branch,
         ) {
             Ok(_) => {
-                // Create the session
-                match Tmux::new_session(server.as_deref(), &session_name, &worktree_path_buf, true) {
-                    Ok(_) => {
+                match Tmux::new_window(managed_server.as_deref(), &managed_session, &session_name, &worktree_path_buf) {
+                    Ok(window_id) => {
+                        let safe_name = session_name.replace('\'', "'\\''");
+                        let claude_cmd = format!("{} --name '{}'", alias, safe_name);
+                        let _ = Tmux::send_keys(managed_server.as_deref(), &window_id, &claude_cmd);
                         self.refresh_sessions();
                         self.message = Some(format!(
-                            "Created worktree '{}' and session '{}'",
+                            "Created worktree '{}' in window '{}'",
                             branch_name, session_name
                         ));
                     }
                     Err(e) => {
                         self.error = Some(format!(
-                            "Worktree created but session creation failed: {}",
+                            "Worktree created but window creation failed: {}",
                             e
                         ));
                     }

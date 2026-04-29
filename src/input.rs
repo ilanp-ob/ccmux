@@ -87,14 +87,6 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.start_worktree_flow();
         }
 
-        // Cycle server filter: Tab = next, Shift+Tab = prev
-        KeyCode::Tab => {
-            app.cycle_server_filter(1);
-        }
-        KeyCode::BackTab => {
-            app.cycle_server_filter(-1);
-        }
-
         _ => {}
     }
 }

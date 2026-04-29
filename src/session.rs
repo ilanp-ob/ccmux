@@ -70,15 +70,17 @@ pub struct Pane {
     pub window_name: String,
 }
 
-/// A tmux session that may contain a Claude Code instance
+/// A tmux window that may contain a Claude Code instance
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Session {
-    /// Session name
+    /// Window name
     pub name: String,
-    /// Unix timestamp when session was created
+    /// Window ID (e.g., "@2") — used for reliable tmux targeting
+    pub window_id: String,
+    /// Unix timestamp of last window activity
     pub created: i64,
-    /// Whether a client is attached to this session
+    /// Whether this is the currently active window
     pub attached: bool,
     /// Working directory (from the Claude Code pane, or first pane)
     pub working_directory: PathBuf,
@@ -122,8 +124,13 @@ impl Session {
     /// single `switch-client -t %42` lands the client on the exact pane.
     /// Falls back to `name:window_index`, then to the bare session name.
     pub fn switch_target(&self) -> String {
+        // Prefer pane ID — tmux resolves it across session/window/pane hierarchy
         if let Some(pane_id) = &self.claude_code_pane {
             return pane_id.clone();
+        }
+        // Window ID (@N) is globally unique and unaffected by automatic-rename
+        if !self.window_id.is_empty() {
+            return self.window_id.clone();
         }
         match &self.target_window_index {
             Some(idx) => format!("{}:{}", self.name, idx),

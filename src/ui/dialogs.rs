@@ -47,7 +47,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
                 .border_style(Style::default().fg(Color::Red));
 
             let mut lines = vec![
-                Line::from(format!("Kill session '{}'", session_name)),
+                Line::from(format!("Kill window '{}'", session_name)),
                 Line::from("AND delete worktree at:"),
                 Line::styled(
                     format!("  {}", worktree_path),
@@ -141,7 +141,7 @@ pub fn render_confirm_action(frame: &mut Frame, app: &App) {
             }
 
             lines.push(Line::styled(
-                format!("  • Kill session '{}'", session_name),
+                format!("  • Kill window '{}'", session_name),
                 Style::default().fg(Color::Red),
             ));
 
@@ -236,7 +236,7 @@ pub fn render_new_session_dialog(
     let area = centered_rect(60, dialog_height, frame.area());
 
     let block = Block::default()
-        .title(" New Session ")
+        .title(" New Window ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
@@ -537,7 +537,7 @@ pub fn render_new_worktree_dialog(
     let area = centered_rect(65, dialog_height, frame.area());
 
     let block = Block::default()
-        .title(" New Session from Worktree ")
+        .title(" New Window from Worktree ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 

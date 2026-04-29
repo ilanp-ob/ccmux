@@ -560,7 +560,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let (working, waiting, _idle) = app.status_counts();
     let total = app.sessions.len();
 
-    let mut parts = vec![format!("{} sessions", total)];
+    let mut parts = vec![format!("{} windows", total)];
 
     if working > 0 {
         parts.push(format!("{} working", working));
@@ -577,13 +577,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
-    let server_info = if let Some(ref s) = app.server_filter {
-        format!(" │ server: {}", s)
-    } else {
-        String::new()
-    };
-
-    let text = format!("  {}{}{}", status, filter_info, server_info);
+    let text = format!("  {}{}", status, filter_info);
 
     let bar = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
 
@@ -593,7 +587,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
         Mode::Normal => {
-            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  R reload  / filter  tab server  q quit"
+            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  R reload  / filter  q quit"
         }
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",

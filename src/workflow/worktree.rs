@@ -189,7 +189,8 @@ impl App {
             };
 
         let source_repo = self.worktree_flow_source_repo.take().unwrap_or_default();
-        let server = self.worktree_flow_server.take();
+        let _server_unused = self.worktree_flow_server.take();
+        let server = self.managed_server.clone();
         let base_dir = expand_path(&self.config.worktree.base_dir);
         let worktree_path = base_dir.join(&folder);
 
@@ -229,15 +230,10 @@ impl App {
         };
 
         if worktree_ok {
-            let current_session = Tmux::current_session(server.as_deref())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "default".to_string());
+            let current_session = self.managed_session.clone();
 
             match Tmux::new_window(server.as_deref(), &current_session, &folder, &worktree_path) {
-                Ok(_) => {
-                    let target = format!("{}:{}", current_session, folder);
-
+                Ok(window_id) => {
                     if launch_claude {
                         let model = AVAILABLE_MODELS[model_index];
                         let effort = AVAILABLE_EFFORTS[effort_index];
@@ -247,7 +243,7 @@ impl App {
                             "{} --model {} --effort {} --name '{}'",
                             alias, model, effort, safe_name
                         );
-                        let _ = Tmux::send_keys(server.as_deref(), &target, &cmd);
+                        let _ = Tmux::send_keys(server.as_deref(), &window_id, &cmd);
                     }
 
                     self.refresh_sessions();
