@@ -145,10 +145,11 @@ impl App {
     /// every 500 ms. Compares the current pane capture against the previous
     /// one: if the content changed the session is Working; if it is the same
     /// we fall back to static text inspection for Idle / WaitingInput / Unknown.
-    pub fn tick_status(&mut self) {
+    /// Returns true if any session status changed (caller should redraw).
+    pub fn tick_status(&mut self) -> bool {
         const STATUS_INTERVAL: Duration = Duration::from_millis(500);
         if self.last_status_tick.elapsed() < STATUS_INTERVAL {
-            return;
+            return false;
         }
         self.last_status_tick = Instant::now();
 
@@ -162,6 +163,8 @@ impl App {
             })
             .collect();
 
+        let mut changed = false;
+
         for (idx, pane_id, server, pane_type) in targets {
             let Ok(content) = Tmux::capture_pane(server.as_deref(), &pane_id, 15, true) else {
                 continue;
@@ -170,18 +173,20 @@ impl App {
             let status = match pane_type {
                 PaneType::Ocli => detect_ocli_status(&content),
                 PaneType::Claude => match self.pane_content_cache.get(&pane_id) {
-                    // Content changed since last tick → definitely working
                     Some(prev) if prev != &content => ClaudeCodeStatus::Working,
-                    // Content unchanged → use static text check
                     Some(_) => detect_static_status(&content),
-                    // No cached entry yet → fall back to full text detection
                     None => detect_status(&content),
                 },
             };
 
-            self.sessions[idx].claude_code_status = status;
+            if self.sessions[idx].claude_code_status != status {
+                self.sessions[idx].claude_code_status = status;
+                changed = true;
+            }
             self.pane_content_cache.insert(pane_id, content);
         }
+
+        changed
     }
 
     /// Clear any displayed messages

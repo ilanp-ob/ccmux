@@ -57,24 +57,32 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, server_filter: Opt
     }
     let mut app = App::new(server_filter, config)?;
 
+    // Always draw on the first iteration
+    let mut needs_redraw = true;
+
     loop {
-        // Draw the UI
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+        if needs_redraw {
+            terminal.draw(|frame| ui::render(frame, &mut app))?;
+            needs_redraw = false;
+        }
 
         // Check if we should quit
         if app.should_quit {
             break;
         }
 
-        // Handle events
+        // Handle events (100ms poll keeps the status tick responsive)
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 input::handle_key(&mut app, key);
+                needs_redraw = true;
             }
         }
 
-        // Refresh Claude status via content-change detection (self-throttled to 500 ms)
-        app.tick_status();
+        // Refresh Claude status (self-throttled to 500ms); redraw if status changed
+        if app.tick_status() {
+            needs_redraw = true;
+        }
     }
 
     Ok(())
