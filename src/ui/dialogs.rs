@@ -217,6 +217,8 @@ pub fn render_new_session_dialog(
     field: NewSessionField,
     path_suggestions: &[String],
     path_selected: Option<usize>,
+    launch_claude: bool,
+    switch_on_create: bool,
 ) {
     // Calculate dialog height based on suggestions shown
     let suggestions_to_show = if field == NewSessionField::Path && !path_suggestions.is_empty() {
@@ -229,7 +231,7 @@ pub fn render_new_session_dialog(
     } else {
         0
     };
-    let dialog_height = 8 + suggestions_to_show as u16 + suggestion_extra as u16;
+    let dialog_height = 11 + suggestions_to_show as u16 + suggestion_extra as u16;
 
     let area = centered_rect(60, dialog_height, frame.area());
 
@@ -332,8 +334,39 @@ pub fn render_new_session_dialog(
     }
 
     lines.push(Line::raw(""));
+
+    // Toggle rows — highlight the focused one
+    let make_toggle = |checked: bool, label: &str, focused: bool| -> Line<'static> {
+        let (check, check_color) = if checked {
+            ("[x]", Color::Green)
+        } else {
+            ("[ ]", Color::DarkGray)
+        };
+        let check_style = if focused {
+            Style::default().fg(check_color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(check_color)
+        };
+        let label_style = if focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let prefix = if focused { "> " } else { "  " };
+        Line::from(vec![
+            Span::raw(prefix),
+            Span::styled(check, check_style),
+            Span::raw(" "),
+            Span::styled(label.to_string(), label_style),
+        ])
+    };
+
+    lines.push(make_toggle(launch_claude, "Launch Claude", field == NewSessionField::LaunchClaude));
+    lines.push(make_toggle(switch_on_create, "Switch to session", field == NewSessionField::SwitchOnCreate));
+
+    lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Tab switch  ↑↓ select  → accept  Enter create  Esc cancel",
+        "Tab switch  ↑↓ select  → accept  Space toggle  Enter create  Esc cancel",
         Style::default().fg(Color::DarkGray),
     ));
 

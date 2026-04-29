@@ -167,16 +167,53 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
             app.cancel();
         }
         KeyCode::Tab => {
-            // Toggle between name and path fields
+            // Cycle through all fields: Name → Path → LaunchClaude → SwitchOnCreate → Name
             if let Mode::NewSession { ref mut field, .. } = app.mode {
                 *field = match field {
                     NewSessionField::Name => NewSessionField::Path,
+                    NewSessionField::Path => NewSessionField::LaunchClaude,
+                    NewSessionField::LaunchClaude => NewSessionField::SwitchOnCreate,
+                    NewSessionField::SwitchOnCreate => NewSessionField::Name,
+                };
+            }
+        }
+        KeyCode::BackTab => {
+            if let Mode::NewSession { ref mut field, .. } = app.mode {
+                *field = match field {
+                    NewSessionField::Name => NewSessionField::SwitchOnCreate,
                     NewSessionField::Path => NewSessionField::Name,
+                    NewSessionField::LaunchClaude => NewSessionField::Path,
+                    NewSessionField::SwitchOnCreate => NewSessionField::LaunchClaude,
                 };
             }
         }
         KeyCode::Enter => {
-            app.confirm_new_session(true); // Start claude by default
+            app.confirm_new_session();
+        }
+        // Space toggles the focused toggle field (or types a space in text fields)
+        KeyCode::Char(' ') => {
+            if let Mode::NewSession {
+                ref field,
+                ref mut launch_claude,
+                ref mut switch_on_create,
+                ref mut path,
+                ref mut path_selected,
+                ..
+            } = app.mode
+            {
+                match field {
+                    NewSessionField::LaunchClaude => *launch_claude = !*launch_claude,
+                    NewSessionField::SwitchOnCreate => *switch_on_create = !*switch_on_create,
+                    NewSessionField::Path => {
+                        path.push(' ');
+                        *path_selected = None;
+                    }
+                    NewSessionField::Name => {} // spaces not allowed in session names
+                }
+            }
+            if current_field == NewSessionField::Path {
+                app.update_new_session_path_suggestions();
+            }
         }
         // Path completion navigation (only when path field is active)
         KeyCode::Up if current_field == NewSessionField::Path => {
@@ -206,6 +243,7 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
                         path.pop();
                         *path_selected = None; // Reset selection on edit
                     }
+                    NewSessionField::LaunchClaude | NewSessionField::SwitchOnCreate => {}
                 }
             }
             if current_field == NewSessionField::Path {
@@ -232,6 +270,7 @@ fn handle_new_session_mode(app: &mut App, key: KeyEvent) {
                         path.push(c);
                         *path_selected = None; // Reset selection on edit
                     }
+                    NewSessionField::LaunchClaude | NewSessionField::SwitchOnCreate => {}
                 }
             }
             if current_field == NewSessionField::Path {

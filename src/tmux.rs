@@ -281,6 +281,12 @@ impl Tmux {
             anyhow::bail!("Failed to create session {}", name);
         }
 
+        // tmux's `default-command "cd ~ && exec $SHELL"` overrides -c, so cd explicitly.
+        let cd_cmd = format!("cd '{}'", path_str.replace('\'', "'\\''"));
+        let _ = Self::cmd(server)
+            .args(["send-keys", "-t", name, &cd_cmd, "Enter"])
+            .status();
+
         if start_claude {
             let _ = Self::cmd(server)
                 .args(["send-keys", "-t", name, "claude", "Enter"])
@@ -348,6 +354,12 @@ impl Tmux {
         if !status.success() {
             anyhow::bail!("Failed to create window '{}' in session '{}'", window_name, session);
         }
+        // tmux's `default-command "cd ~ && exec $SHELL"` overrides -c, so cd explicitly.
+        let cd_cmd = format!("cd '{}'", path_str.replace('\'', "'\\''"));
+        let target = format!("{}:{}", session, window_name);
+        let _ = Self::cmd(server)
+            .args(["send-keys", "-t", &target, &cd_cmd, "Enter"])
+            .status();
         Ok(())
     }
 

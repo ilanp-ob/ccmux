@@ -748,17 +748,21 @@ impl App {
             field: NewSessionField::Name,
             path_suggestions: completion.suggestions,
             path_selected: None,
+            launch_claude: true,
+            switch_on_create: true,
         };
     }
 
     /// Create a new named tmux session and switch to it (closing this popup)
-    pub fn confirm_new_session(&mut self, start_claude: bool) {
+    pub fn confirm_new_session(&mut self) {
         let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::NewSession {
             ref name,
             ref path,
             ref path_suggestions,
             ref path_selected,
+            launch_claude,
+            switch_on_create,
             ..
         } = self.mode
         {
@@ -769,6 +773,8 @@ impl App {
             }
 
             let session_name = name.clone();
+            let do_claude = launch_claude;
+            let do_switch = switch_on_create;
             // Use highlighted suggestion if one is selected, otherwise use the typed path
             let actual_path = path_selected
                 .and_then(|idx| path_suggestions.get(idx))
@@ -776,11 +782,15 @@ impl App {
                 .unwrap_or_else(|| path.clone());
             let session_path = expand_path(&actual_path);
 
-            match Tmux::new_session(server.as_deref(), &session_name, &session_path, start_claude) {
+            match Tmux::new_session(server.as_deref(), &session_name, &session_path, do_claude) {
                 Ok(_) => {
-                    // Switch the outer tmux client to the new session, then close the popup.
-                    let _ = Tmux::switch_to_session(server.as_deref(), &session_name);
-                    self.should_quit = true;
+                    if do_switch {
+                        let _ = Tmux::switch_to_session(server.as_deref(), &session_name);
+                        self.should_quit = true;
+                    } else {
+                        self.refresh_sessions();
+                        self.message = Some(format!("Created session '{}'", session_name));
+                    }
                 }
                 Err(e) => {
                     self.error = Some(format!("Failed to create session: {}", e));

@@ -56,6 +56,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             field,
             path_suggestions,
             path_selected,
+            launch_claude,
+            switch_on_create,
         } => {
             dialogs::render_new_session_dialog(
                 frame,
@@ -64,6 +66,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 *field,
                 path_suggestions,
                 *path_selected,
+                *launch_claude,
+                *switch_on_create,
             );
         }
         Mode::Rename { old_name, new_name } => {
@@ -588,7 +592,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
         Mode::ConfirmAction => "  y/⏎ confirm  n/esc cancel",
-        Mode::NewSession { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
+        Mode::NewSession { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  space toggle claude  esc cancel",
         Mode::Rename { .. } => "  ⏎ confirm  esc cancel",
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
         Mode::NewWorktree { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",

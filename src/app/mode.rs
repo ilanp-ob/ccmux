@@ -25,6 +25,10 @@ pub enum Mode {
         path_suggestions: Vec<String>,
         /// Currently selected path suggestion index
         path_selected: Option<usize>,
+        /// Whether to launch Claude after creating the session
+        launch_claude: bool,
+        /// Whether to switch to the new session immediately
+        switch_on_create: bool,
     },
     /// Renaming a session
     Rename { old_name: String, new_name: String },
@@ -185,6 +189,8 @@ impl SessionAction {
 pub enum NewSessionField {
     Name,
     Path,
+    LaunchClaude,
+    SwitchOnCreate,
 }
 
 /// Which field is active in the new worktree dialog
