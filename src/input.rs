@@ -87,6 +87,14 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.start_worktree_flow();
         }
 
+        // Cycle server filter: ] = next, [ = prev
+        KeyCode::Char(']') => {
+            app.cycle_server_filter(1);
+        }
+        KeyCode::Char('[') => {
+            app.cycle_server_filter(-1);
+        }
+
         _ => {}
     }
 }

@@ -577,7 +577,13 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
-    let text = format!("  {}{}", status, filter_info);
+    let server_info = if let Some(ref s) = app.server_filter {
+        format!(" │ server: {}", s)
+    } else {
+        String::new()
+    };
+
+    let text = format!("  {}{}{}", status, filter_info, server_info);
 
     let bar = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
 
@@ -587,7 +593,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
         Mode::Normal => {
-            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  R reload  / filter  q quit"
+            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  R reload  / filter  [/] server  q quit"
         }
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",

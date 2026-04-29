@@ -203,6 +203,34 @@ impl App {
         }
     }
 
+    /// Cycle the server filter forward (dir=1) or backward (dir=-1).
+    /// Cycles: all → server1 → server2 → … → all
+    pub fn cycle_server_filter(&mut self, dir: i32) {
+        let mut servers = Tmux::discover_servers();
+        servers.sort();
+
+        // Build the ordered list: None (all), then each server
+        // Find current index
+        let current_idx = match &self.server_filter {
+            None => 0,
+            Some(s) => servers.iter().position(|x| x == s).map(|i| i + 1).unwrap_or(0),
+        };
+
+        let total = servers.len() + 1; // 0 = all, 1..N = servers
+        let next_idx = ((current_idx as i32 + dir).rem_euclid(total as i32)) as usize;
+
+        self.server_filter = if next_idx == 0 {
+            None
+        } else {
+            servers.into_iter().nth(next_idx - 1)
+        };
+
+        let label = self.server_filter.clone().unwrap_or_else(|| "all".to_string());
+        self.message = Some(format!("Server: {}", label));
+        self.selected = 0;
+        self.refresh_sessions();
+    }
+
     /// Refresh sessions without affecting messages (for use after git operations)
     pub(crate) fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
