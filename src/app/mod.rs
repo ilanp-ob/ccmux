@@ -734,8 +734,10 @@ impl App {
     /// Start the new session flow
     pub fn start_new_session(&mut self) {
         self.clear_messages();
-        // Default to the configured base_dir so the user lands near their projects
-        let default_path = self.config.worktree.base_dir.clone();
+        // Trailing slash triggers "list this directory" mode in the completion engine,
+        // so typing 'h' gives "~/dev/h" (filter) instead of "~/devh" (garbage).
+        let base = self.config.worktree.base_dir.trim_end_matches('/').to_string();
+        let default_path = format!("{}/", base);
 
         // Get initial path suggestions
         let completion = crate::completion::complete_path(&default_path);
@@ -749,7 +751,7 @@ impl App {
         };
     }
 
-    /// Create a new tmux window (within the current session) for a Claude Code instance
+    /// Create a new named tmux session and switch to it (closing this popup)
     pub fn confirm_new_session(&mut self, start_claude: bool) {
         let server = self.selected_session().and_then(|s| s.server.clone());
         if let Mode::NewSession {
@@ -766,31 +768,22 @@ impl App {
                 return;
             }
 
-            let window_name = name.clone();
-            // Use highlighted suggestion if one is selected, otherwise use typed path
+            let session_name = name.clone();
+            // Use highlighted suggestion if one is selected, otherwise use the typed path
             let actual_path = path_selected
                 .and_then(|idx| path_suggestions.get(idx))
                 .cloned()
                 .unwrap_or_else(|| path.clone());
-            let window_path = expand_path(&actual_path);
+            let session_path = expand_path(&actual_path);
 
-            let current_session = Tmux::current_session(server.as_deref())
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "main".to_string());
-
-            match Tmux::new_window(server.as_deref(), &current_session, &window_name, &window_path) {
+            match Tmux::new_session(server.as_deref(), &session_name, &session_path, start_claude) {
                 Ok(_) => {
-                    let target = format!("{}:{}", current_session, window_name);
-                    if start_claude {
-                        let _ = Tmux::send_keys(server.as_deref(), &target, "claude");
-                    }
-                    // Switch the outer session to the new window before closing the popup
-                    let _ = Tmux::select_window(server.as_deref(), &target);
+                    // Switch the outer tmux client to the new session, then close the popup.
+                    let _ = Tmux::switch_to_session(server.as_deref(), &session_name);
                     self.should_quit = true;
                 }
                 Err(e) => {
-                    self.error = Some(format!("Failed to create window: {}", e));
+                    self.error = Some(format!("Failed to create session: {}", e));
                 }
             }
         }

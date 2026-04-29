@@ -351,17 +351,6 @@ impl Tmux {
         Ok(())
     }
 
-    /// Switch the tmux client to a specific window target (e.g. "session:window")
-    pub fn select_window(server: Option<&str>, target: &str) -> Result<()> {
-        let status = Self::cmd(server)
-            .args(["select-window", "-t", target])
-            .status()
-            .context("Failed to select window")?;
-        if !status.success() {
-            anyhow::bail!("Failed to select window '{}'", target);
-        }
-        Ok(())
-    }
 
     pub fn send_keys(
         server: Option<&str>,
