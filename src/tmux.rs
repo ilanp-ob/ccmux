@@ -572,6 +572,15 @@ impl Tmux {
         if id.is_empty() { None } else { Some(id) }
     }
 
+    /// Set the @ccmux_color window variable so `window-status-format` can read it.
+    pub fn set_window_color(server: Option<&str>, window_id: &str, tmux_colour: &str) -> Result<()> {
+        Self::cmd(server)
+            .args(["set-window-option", "-t", window_id, "@ccmux_color", tmux_colour])
+            .status()
+            .context("Failed to set window color")?;
+        Ok(())
+    }
+
     pub fn send_keys(
         server: Option<&str>,
         target: &str,

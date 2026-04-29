@@ -100,6 +100,11 @@ pub enum WorktreeFlowState {
         model_index: usize,
         effort_index: usize,
         launch_claude: bool,
+        /// Index into config::WINDOW_COLORS (0 = none)
+        color_index: usize,
+        /// Whether to open VS Code in the worktree folder
+        open_vscode: bool,
+        /// Active field: 0=model 1=effort 2=launch 3=color 4=vscode
         field: usize,
     },
     Executing,

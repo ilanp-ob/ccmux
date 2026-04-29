@@ -155,13 +155,15 @@ impl App {
                 model_index,
                 effort_index,
                 launch_claude: true,
+                color_index: 0,
+                open_vscode: false,
                 field: 0,
             },
         };
     }
 
     pub fn worktree_flow_execute(&mut self) {
-        let (branch, is_new_branch, _base_branch, folder, model_index, effort_index, launch_claude) =
+        let (branch, is_new_branch, _base_branch, folder, model_index, effort_index, launch_claude, color_index, open_vscode) =
             if let Mode::WorktreeFlow {
                 state: WorktreeFlowState::ClaudeOptions {
                     ref branch,
@@ -171,6 +173,8 @@ impl App {
                     model_index,
                     effort_index,
                     launch_claude,
+                    color_index,
+                    open_vscode,
                     ..
                 },
             } = self.mode
@@ -183,6 +187,8 @@ impl App {
                     model_index,
                     effort_index,
                     launch_claude,
+                    color_index,
+                    open_vscode,
                 )
             } else {
                 return;
@@ -239,6 +245,12 @@ impl App {
 
             match Tmux::new_window(server.as_deref(), &current_session, &folder, &worktree_path) {
                 Ok(window_id) => {
+                    // Apply window color if one was chosen
+                    let (_, color_hex, tmux_colour) = crate::config::WINDOW_COLORS[color_index];
+                    if !tmux_colour.is_empty() {
+                        let _ = Tmux::set_window_color(server.as_deref(), &window_id, tmux_colour);
+                    }
+
                     if launch_claude {
                         let model = AVAILABLE_MODELS[model_index];
                         let effort = AVAILABLE_EFFORTS[effort_index];
@@ -249,6 +261,14 @@ impl App {
                             alias, model, effort, safe_name
                         );
                         let _ = Tmux::send_keys(server.as_deref(), &window_id, &cmd);
+                    }
+
+                    if open_vscode {
+                        // Write VS Code workspace color before opening so it's picked up immediately
+                        if !color_hex.is_empty() {
+                            apply_vscode_color(&worktree_path, color_hex);
+                        }
+                        open_vscode_window(&worktree_path, &mut self.error, &mut self.message);
                     }
 
                     self.refresh_sessions();
@@ -270,4 +290,77 @@ impl App {
 
         self.mode = Mode::Normal;
     }
+}
+
+/// Merge `workbench.colorCustomizations` into `.vscode/settings.json`.
+fn apply_vscode_color(path: &std::path::Path, hex: &str) {
+    let vscode_dir = path.join(".vscode");
+    let settings_path = vscode_dir.join("settings.json");
+
+    // Read existing settings if present
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Derive a slightly darker shade for inactive title bar
+    let inactive = darken_hex(hex, 40);
+
+    let color_section = serde_json::json!({
+        "titleBar.activeBackground": hex,
+        "titleBar.activeForeground": "#ffffff",
+        "titleBar.inactiveBackground": inactive,
+        "titleBar.inactiveForeground": "#cccccc",
+    });
+
+    if let Some(obj) = settings.as_object_mut() {
+        let entry = obj
+            .entry("workbench.colorCustomizations")
+            .or_insert(serde_json::json!({}));
+        if let (Some(target), Some(src)) = (entry.as_object_mut(), color_section.as_object()) {
+            for (k, v) in src {
+                target.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    let _ = std::fs::create_dir_all(&vscode_dir);
+    if let Ok(json) = serde_json::to_string_pretty(&settings) {
+        let _ = std::fs::write(&settings_path, json);
+    }
+}
+
+fn open_vscode_window(
+    path: &std::path::Path,
+    error: &mut Option<String>,
+    _message: &mut Option<String>,
+) {
+    let status = std::process::Command::new("code")
+        .args(["--new-window", &path.to_string_lossy()])
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(_) => {
+            *error = Some("VS Code ('code') exited with an error".to_string());
+        }
+        Err(_) => {
+            *error = Some("VS Code CLI ('code') not found on PATH — install it from VS Code: Shell Command > Install 'code' command".to_string());
+        }
+    }
+}
+
+/// Darken a hex color (#RRGGBB) by subtracting `amount` from each channel.
+fn darken_hex(hex: &str, amount: u8) -> String {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return format!("#{}", hex);
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0).saturating_sub(amount);
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0).saturating_sub(amount);
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0).saturating_sub(amount);
+    format!("#{:02X}{:02X}{:02X}", r, g, b)
 }

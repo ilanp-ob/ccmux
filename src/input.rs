@@ -733,7 +733,7 @@ fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
                     state: WorktreeFlowState::ClaudeOptions { ref mut field, .. },
                 } = app.mode
                 {
-                    *field = (*field + 1) % 3;
+                    *field = (*field + 1) % 5;
                 }
             }
             KeyCode::BackTab => {
@@ -741,7 +741,7 @@ fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
                     state: WorktreeFlowState::ClaudeOptions { ref mut field, .. },
                 } = app.mode
                 {
-                    *field = if *field == 0 { 2 } else { *field - 1 };
+                    *field = if *field == 0 { 4 } else { *field - 1 };
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {
@@ -750,23 +750,19 @@ fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
                         ref mut model_index,
                         ref mut effort_index,
                         ref mut launch_claude,
+                        ref mut color_index,
+                        ref mut open_vscode,
                         field,
                         ..
                     },
                 } = app.mode
                 {
                     match field {
-                        0 => {
-                            if *model_index > 0 {
-                                *model_index -= 1;
-                            }
-                        }
-                        1 => {
-                            if *effort_index > 0 {
-                                *effort_index -= 1;
-                            }
-                        }
+                        0 => { if *model_index > 0 { *model_index -= 1; } }
+                        1 => { if *effort_index > 0 { *effort_index -= 1; } }
                         2 => *launch_claude = !*launch_claude,
+                        3 => { if *color_index > 0 { *color_index -= 1; } }
+                        4 => *open_vscode = !*open_vscode,
                         _ => {}
                     }
                 }
@@ -777,23 +773,22 @@ fn handle_worktree_flow_mode(app: &mut App, key: KeyEvent) {
                         ref mut model_index,
                         ref mut effort_index,
                         ref mut launch_claude,
+                        ref mut color_index,
+                        ref mut open_vscode,
                         field,
                         ..
                     },
                 } = app.mode
                 {
                     match field {
-                        0 => {
-                            if *model_index < AVAILABLE_MODELS.len() - 1 {
-                                *model_index += 1;
-                            }
-                        }
-                        1 => {
-                            if *effort_index < AVAILABLE_EFFORTS.len() - 1 {
-                                *effort_index += 1;
-                            }
-                        }
+                        0 => { if *model_index < AVAILABLE_MODELS.len() - 1 { *model_index += 1; } }
+                        1 => { if *effort_index < AVAILABLE_EFFORTS.len() - 1 { *effort_index += 1; } }
                         2 => *launch_claude = !*launch_claude,
+                        3 => {
+                            use crate::config::WINDOW_COLORS;
+                            if *color_index < WINDOW_COLORS.len() - 1 { *color_index += 1; }
+                        }
+                        4 => *open_vscode = !*open_vscode,
                         _ => {}
                     }
                 }

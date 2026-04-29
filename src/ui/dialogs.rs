@@ -943,45 +943,52 @@ pub fn render_worktree_flow_dialog(
             model_index,
             effort_index,
             launch_claude,
+            color_index,
+            open_vscode,
             field,
             ..
         } => {
-            let area = centered_rect(60, 12, frame.area());
+            use crate::config::WINDOW_COLORS;
+
+            let area = centered_rect(60, 16, frame.area());
             let block = Block::default()
                 .title(" Claude Options ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan));
 
-            let model_style = if *field == 0 {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let effort_style = if *field == 1 {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let launch_style = if *field == 2 {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
+            let focused_style = |f: usize| {
+                if *field == f {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                }
             };
 
             let model = AVAILABLE_MODELS[*model_index];
             let effort = AVAILABLE_EFFORTS[*effort_index];
+
             let launch_str = if *launch_claude { "YES" } else { "NO" };
-            let launch_color = if *launch_claude {
-                Color::Green
+            let launch_color = if *launch_claude { Color::Green } else { Color::Red };
+
+            let (color_name, color_hex, _) = WINDOW_COLORS[*color_index];
+            let color_display_color = if color_hex.is_empty() {
+                Color::DarkGray
             } else {
-                Color::Red
+                // Map hex to nearest ratatui named color for preview swatch
+                match *color_index {
+                    1 => Color::Red,
+                    2 => Color::Yellow,
+                    3 => Color::Green,
+                    4 => Color::Blue,
+                    5 => Color::Magenta,
+                    6 => Color::LightMagenta,
+                    7 => Color::Cyan,
+                    _ => Color::DarkGray,
+                }
             };
+
+            let vscode_str = if *open_vscode { "YES" } else { "NO" };
+            let vscode_color = if *open_vscode { Color::Green } else { Color::Red };
 
             let lines = vec![
                 Line::from(vec![
@@ -992,29 +999,28 @@ pub fn render_worktree_flow_dialog(
                 ]),
                 Line::raw(""),
                 Line::from(vec![
-                    Span::styled("Model:  ", model_style),
-                    Span::styled(
-                        format!("◀ {} ▶", model),
-                        Style::default().fg(Color::Yellow),
-                    ),
+                    Span::styled("Model:  ", focused_style(0)),
+                    Span::styled(format!("◀ {} ▶", model), Style::default().fg(Color::Yellow)),
                 ]),
                 Line::raw(""),
                 Line::from(vec![
-                    Span::styled("Effort: ", effort_style),
-                    Span::styled(
-                        format!("◀ {} ▶", effort),
-                        Style::default().fg(Color::Yellow),
-                    ),
+                    Span::styled("Effort: ", focused_style(1)),
+                    Span::styled(format!("◀ {} ▶", effort), Style::default().fg(Color::Yellow)),
                 ]),
                 Line::raw(""),
                 Line::from(vec![
-                    Span::styled("Launch: ", launch_style),
-                    Span::styled(
-                        launch_str,
-                        Style::default()
-                            .fg(launch_color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled("Launch: ", focused_style(2)),
+                    Span::styled(launch_str, Style::default().fg(launch_color).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Color:  ", focused_style(3)),
+                    Span::styled(format!("◀ {} ▶", color_name), Style::default().fg(color_display_color).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("VSCode: ", focused_style(4)),
+                    Span::styled(vscode_str, Style::default().fg(vscode_color).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::raw(""),
                 Line::styled(

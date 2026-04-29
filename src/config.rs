@@ -81,6 +81,19 @@ pub const AVAILABLE_EFFORTS: &[&str] = &[
     "auto",
 ];
 
+/// (display_name, hex_for_vscode, tmux_colour_for_variable)
+/// "none" means no color — don't set the window variable.
+pub const WINDOW_COLORS: &[(&str, &str, &str)] = &[
+    ("none",   "",        ""),
+    ("red",    "#E06C75", "colour167"),
+    ("orange", "#E5C07B", "colour179"),
+    ("green",  "#98C379", "colour114"),
+    ("blue",   "#61AFEF", "colour75"),
+    ("purple", "#C678DD", "colour135"),
+    ("pink",   "#FF79C6", "colour212"),
+    ("cyan",   "#56B6C2", "colour73"),
+];
+
 impl Default for Config {
     fn default() -> Self {
         Config {
