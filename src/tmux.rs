@@ -537,6 +537,29 @@ impl Tmux {
         Ok(panes)
     }
 
+    /// Return the window ID that was last active before the current window
+    /// (i.e., where the user was before opening ccmux).
+    pub fn last_active_window_id(server: Option<&str>, session_name: &str) -> Option<String> {
+        let output = Self::cmd(server)
+            .args([
+                "list-windows",
+                "-t", session_name,
+                "-F", "#{window_id}\t#{window_last_flag}",
+            ])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let mut parts = line.splitn(2, '\t');
+            let id = parts.next()?;
+            let flag = parts.next().unwrap_or("0");
+            if flag.trim() == "1" {
+                return Some(id.to_string());
+            }
+        }
+        None
+    }
+
     /// Return the window ID of the pane ccmux is running in, used to exclude
     /// ccmux's own window from the listed sessions.
     pub fn own_window_id(server: Option<&str>) -> Option<String> {

@@ -94,6 +94,11 @@ impl App {
             .unwrap_or_default();
 
         let own_window_id = Tmux::own_window_id(server.as_deref());
+        let last_window_id = if managed_session.is_empty() {
+            None
+        } else {
+            Tmux::last_active_window_id(server.as_deref(), &managed_session)
+        };
 
         let sessions = if managed_session.is_empty() {
             Vec::new()
@@ -106,6 +111,12 @@ impl App {
             .unwrap_or_default()
         };
 
+        // Pre-select the window the user was in before opening ccmux
+        let initial_selected = last_window_id
+            .as_deref()
+            .and_then(|id| sessions.iter().position(|s| s.window_id == id))
+            .unwrap_or(0);
+
         let error = if managed_session.is_empty() {
             Some("Not running inside tmux. Launch ccmux from within a tmux session.".to_string())
         } else {
@@ -114,7 +125,7 @@ impl App {
 
         let mut app = Self {
             sessions,
-            selected: 0,
+            selected: initial_selected,
             mode: Mode::Normal,
             should_quit: false,
             current_session: Some(managed_session.clone()),
