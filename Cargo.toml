@@ -1,16 +1,13 @@
 [package]
 name = "ccmux"
-version = "0.5.0"
+version = "0.1.0"
 edition = "2021"
-description = "TUI for managing Claude Code tmux sessions"
+description = "tmux sidebar for managing Claude Code sessions"
 license = "AGPL-3.0-only"
-authors = ["Ilan Peretz", "Niels Groeneveld (original author)"]
-repository = "https://github.com/ilanp-ob/ccmux"
-homepage = "https://github.com/ilanp-ob/ccmux"
-readme = "README.md"
-keywords = ["tmux", "cli", "tui", "claude", "terminal"]
-categories = ["command-line-utilities", "development-tools"]
-exclude = [".claude/", "docs/", ".github/"]
+
+[[bin]]
+name = "ccmux"
+path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.29"
@@ -18,10 +15,8 @@ crossterm = "0.28"
 anyhow = "1.0"
 dirs = "5.0"
 unicode-width = "0.2"
-ansi-to-tui = "7.0"
-git2 = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
-libc = "0.2"
+git2 = "0.20"
