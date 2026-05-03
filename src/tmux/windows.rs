@@ -107,7 +107,7 @@ impl Tmux {
     /// Check whether a pane is still alive.
     pub fn pane_exists(&self, pane_id: &str) -> bool {
         self.cmd()
-            .args(["has-session", "-t", pane_id])
+            .args(["list-panes", "-t", pane_id])
             .status()
             .map(|s| s.success())
             .unwrap_or(false)

@@ -68,7 +68,7 @@ impl Tmux {
     pub fn capture_pane(&self, pane_id: &str, lines: usize, strip: bool) -> Result<String> {
         let lines_str = format!("-{}", lines);
         let mut args = vec!["capture-pane", "-p", "-t", pane_id, "-S", &lines_str];
-        if strip {
+        if !strip {
             args.push("-e");
         }
         let output = self.cmd().args(&args).output()

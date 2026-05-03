@@ -76,7 +76,7 @@ fn run_status(server: Option<&str>, window: Option<&str>) -> Result<()> {
                 print!("?");
                 return Ok(());
             }
-            let output = std::process::Command::new("tmux")
+            let output = tmux.cmd()
                 .args(["display-message", "-t", &pane_id, "-p", "#{window_id}"])
                 .output()?;
             String::from_utf8_lossy(&output.stdout).trim().to_string()
@@ -95,7 +95,7 @@ fn run_status(server: Option<&str>, window: Option<&str>) -> Result<()> {
     }
 
     // Find Claude pane in this window
-    let output = std::process::Command::new("tmux")
+    let output = tmux.cmd()
         .args(["list-panes", "-t", &window_id, "-F",
                "#{pane_id}\t#{pane_current_command}"])
         .output()?;
