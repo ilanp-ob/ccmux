@@ -115,8 +115,75 @@ fn run_status(server: Option<&str>, window: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_toggle(_server: Option<String>) -> Result<()> {
-    todo!("implemented in Task 9")
+fn run_toggle(server: Option<String>) -> Result<()> {
+    let tmux = tmux::Tmux::new(server.clone());
+
+    let session = tmux.current_session()?.unwrap_or_default();
+    if session.is_empty() {
+        anyhow::bail!("Not inside a tmux session");
+    }
+
+    let window_id = tmux.own_window_id().unwrap_or_default();
+    let var_key = format!("@ccmux_sidebar_{}_{}", session, window_id);
+
+    // Check if a sidebar pane already exists
+    if let Some(pane_id) = tmux.get_var(&var_key) {
+        // Verify it's still alive (pane might have died)
+        let alive = tmux.cmd()
+            .args(["list-panes", "-F", "#{pane_id}"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pane_id))
+            .unwrap_or(false);
+
+        if alive {
+            tmux.kill_pane(&pane_id)?;
+            tmux.del_var(&var_key)?;
+            return Ok(());
+        } else {
+            tmux.del_var(&var_key)?;
+        }
+    }
+
+    // Spawn sidebar
+    let config = config::Config::load().unwrap_or_default();
+
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+
+    let sidebar_cmd = match &server {
+        Some(s) => format!("{} sidebar --server {}", binary, s),
+        None => format!("{} sidebar", binary),
+    };
+
+    let pane_id = tmux.split_sidebar(&session, config.sidebar.width, &sidebar_cmd)?;
+    tmux.set_var(&var_key, &pane_id)?;
+
+    // Spawn notify-worker if not already running
+    let notify_pid_key = "@ccmux_notify_pid";
+    let worker_running = tmux.get_var(notify_pid_key)
+        .and_then(|pid| pid.parse::<u32>().ok())
+        .map(|pid| {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if !worker_running {
+        let notify_cmd = match &server {
+            Some(s) => format!("{} notify-worker --server {}", binary, s),
+            None => format!("{} notify-worker", binary),
+        };
+        let child = std::process::Command::new("sh")
+            .args(["-c", &format!("{} &", notify_cmd)])
+            .spawn()?;
+        tmux.set_var(notify_pid_key, &child.id().to_string())?;
+    }
+
+    Ok(())
 }
 
 fn run_sidebar(_server: Option<String>) -> Result<()> {
