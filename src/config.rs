@@ -1,88 +1,149 @@
 use std::path::PathBuf;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_claude")]
+    #[serde(default)]
+    pub sidebar: SidebarConfig,
+    #[serde(default)]
     pub claude: ClaudeConfig,
-    #[serde(default = "default_worktree")]
+    #[serde(default)]
+    pub detection: DetectionConfig,
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
+    #[serde(default)]
     pub worktree: WorktreeConfig,
+    #[serde(default)]
+    pub servers: ServersConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SidebarConfig {
+    pub width: u16,
+    pub position: String,
+    pub refresh_ms: u64,
+}
+impl Default for SidebarConfig {
+    fn default() -> Self { Self { width: 50, position: "left".into(), refresh_ms: 500 } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ClaudeConfig {
-    #[serde(default = "default_alias")]
     pub alias: String,
-    #[serde(default = "default_model")]
     pub default_model: String,
-    #[serde(default = "default_effort")]
     pub default_effort: String,
 }
+impl Default for ClaudeConfig {
+    fn default() -> Self {
+        Self {
+            alias: "claude".into(),
+            default_model: "claude-sonnet-4-6".into(),
+            default_effort: "high".into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DetectionConfig {
+    pub commands: Vec<String>,
+}
+impl Default for DetectionConfig {
+    fn default() -> Self {
+        Self { commands: vec!["claude".into(), "ocli".into(), "ops-cli".into()] }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationsConfig {
+    pub enabled: bool,
+    pub macos: bool,
+    pub tmux_bell: bool,
+    pub repeat_secs: u64,
+}
+impl Default for NotificationsConfig {
+    fn default() -> Self { Self { enabled: true, macos: true, tmux_bell: true, repeat_secs: 0 } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorktreeConfig {
-    #[serde(default = "default_base_dir")]
     pub base_dir: String,
-    #[serde(default = "default_houston_path")]
     pub houston_path: String,
-    #[serde(default = "default_worktree_defaults")]
     pub defaults: WorktreeDefaults,
 }
+impl Default for WorktreeConfig {
+    fn default() -> Self {
+        Self {
+            base_dir: "~/dev".into(),
+            houston_path: "~/dev/houston".into(),
+            defaults: WorktreeDefaults::default(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorktreeDefaults {
-    #[serde(default = "default_base_branch")]
     pub base_branch: String,
 }
+impl Default for WorktreeDefaults {
+    fn default() -> Self { Self { base_branch: "origin/master".into() } }
+}
 
-fn default_claude() -> ClaudeConfig {
-    ClaudeConfig {
-        alias: default_alias(),
-        default_model: default_model(),
-        default_effort: default_effort(),
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ServersConfig {
+    pub extra: Vec<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            sidebar: SidebarConfig::default(),
+            claude: ClaudeConfig::default(),
+            detection: DetectionConfig::default(),
+            notifications: NotificationsConfig::default(),
+            worktree: WorktreeConfig::default(),
+            servers: ServersConfig::default(),
+        }
     }
 }
 
-fn default_worktree() -> WorktreeConfig {
-    WorktreeConfig {
-        base_dir: default_base_dir(),
-        houston_path: default_houston_path(),
-        defaults: default_worktree_defaults(),
+impl Config {
+    pub fn path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.config"))
+            .join("ccmux")
+            .join("config.toml")
+    }
+
+    pub fn load() -> Result<Self> {
+        let path = Self::path();
+        if !path.exists() {
+            let config = Config::default();
+            config.save()?;
+            return Ok(config);
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read config at {}", path.display()))?;
+        toml::from_str(&text).with_context(|| "Failed to parse config.toml")
+    }
+
+    pub fn save(&self) -> Result<()> {
+        let path = Self::path();
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let text = toml::to_string_pretty(self)?;
+        std::fs::write(&path, text)?;
+        Ok(())
     }
 }
 
-fn default_worktree_defaults() -> WorktreeDefaults {
-    WorktreeDefaults {
-        base_branch: default_base_branch(),
-    }
-}
-
-fn default_alias() -> String { "c".to_string() }
-fn default_model() -> String { "claude-opus-4-6".to_string() }
-fn default_effort() -> String { "high".to_string() }
-fn default_base_dir() -> String { "~/dev".to_string() }
-fn default_houston_path() -> String { "~/dev/houston".to_string() }
-fn default_base_branch() -> String { "origin/master".to_string() }
-
-pub const AVAILABLE_MODELS: &[&str] = &[
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-];
-
-pub const AVAILABLE_EFFORTS: &[&str] = &[
-    "low",
-    "medium",
-    "high",
-    "max",
-    "auto",
-];
-
-/// (display_name, hex_for_vscode, tmux_colour_for_variable)
-/// "none" means no color — don't set the window variable.
+/// (display_name, hex_for_vscode, tmux_colour)
 pub const WINDOW_COLORS: &[(&str, &str, &str)] = &[
     ("none",   "",        ""),
     ("red",    "#E06C75", "colour167"),
@@ -94,49 +155,34 @@ pub const WINDOW_COLORS: &[(&str, &str, &str)] = &[
     ("cyan",   "#56B6C2", "colour73"),
 ];
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            claude: default_claude(),
-            worktree: default_worktree(),
-        }
-    }
-}
+pub const AVAILABLE_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+];
 
-impl Config {
-    pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.config"))
-            .join("ccmux")
-            .join("config.toml")
-    }
+pub const AVAILABLE_EFFORTS: &[&str] = &["low", "medium", "high", "max", "auto"];
 
-    pub fn load() -> Result<Self> {
-        let path = Self::config_path();
-        if !path.exists() {
-            return Ok(Config::default());
-        }
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read config at {}", path.display()))?;
-        let config: Config = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config at {}", path.display()))?;
-        Ok(config)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_sane() {
+        let c = Config::default();
+        assert_eq!(c.sidebar.width, 50);
+        assert_eq!(c.claude.default_model, "claude-sonnet-4-6");
+        assert_eq!(c.detection.commands, vec!["claude", "ocli", "ops-cli"]);
+        assert!(c.notifications.enabled);
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
-        }
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-        std::fs::write(&path, content)
-            .with_context(|| format!("Failed to write config to {}", path.display()))?;
-        Ok(())
-    }
-
-    pub fn exists() -> bool {
-        Self::config_path().exists()
+    #[test]
+    fn round_trip_toml() {
+        let c = Config::default();
+        let text = toml::to_string_pretty(&c).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.sidebar.width, c.sidebar.width);
+        assert_eq!(parsed.claude.alias, c.claude.alias);
     }
 }
