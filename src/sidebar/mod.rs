@@ -23,8 +23,10 @@ pub struct App {
     pub config: Config,
     pub managed_session: String,
     pub managed_server: Option<String>,
-    /// Window ID of the pane ccmux itself is running in (excluded from list)
+    /// Window ID of the pane ccmux itself is running in (used for focus logic)
     pub own_window_id: Option<String>,
+    /// Pane ID of the sidebar itself (excluded from session list)
+    own_pane_id: Option<String>,
     pub error: Option<String>,
     pub message: Option<String>,
     pane_content_cache: HashMap<String, String>,
@@ -37,11 +39,12 @@ impl App {
         let tmux = Tmux::new(server.clone());
         let managed_session = tmux.current_session()?.unwrap_or_default();
         let own_window_id = tmux.own_window_id();
+        let own_pane_id = std::env::var("TMUX_PANE").ok();
 
         let groups = if managed_session.is_empty() {
             Vec::new()
         } else {
-            Self::load_groups(&server, &managed_session, own_window_id.as_deref(), &config)
+            Self::load_groups(&server, &managed_session, own_pane_id.as_deref(), &config)
         };
 
         let last_active = if !managed_session.is_empty() {
@@ -67,6 +70,7 @@ impl App {
             managed_session,
             managed_server: server,
             own_window_id,
+            own_pane_id,
             error,
             message: None,
             pane_content_cache: HashMap::new(),
@@ -78,14 +82,14 @@ impl App {
     fn load_groups(
         server: &Option<String>,
         session: &str,
-        exclude_window_id: Option<&str>,
+        exclude_pane_id: Option<&str>,
         config: &Config,
     ) -> Vec<WindowGroup> {
         let mut all_groups = Vec::new();
 
         // Default server
         let tmux = Tmux::new(server.clone());
-        if let Ok(groups) = tmux.list_groups(session, exclude_window_id, &config.detection.commands) {
+        if let Ok(groups) = tmux.list_groups(session, exclude_pane_id, &config.detection.commands) {
             all_groups.extend(groups);
         }
 
@@ -165,7 +169,7 @@ impl App {
         let new_groups = Self::load_groups(
             &self.managed_server,
             &self.managed_session,
-            self.own_window_id.as_deref(),
+            self.own_pane_id.as_deref(),
             &self.config,
         );
 

@@ -67,7 +67,7 @@ impl Tmux {
     pub fn list_groups(
         &self,
         session: &str,
-        exclude_window_id: Option<&str>,
+        exclude_pane_id: Option<&str>,
         configured_commands: &[String],
     ) -> Result<Vec<WindowGroup>> {
         let output = self.cmd()
@@ -104,7 +104,8 @@ impl Tmux {
             let current_path = PathBuf::from(parts[6]);
             let pane_pid: u32 = parts.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
 
-            if exclude_window_id.is_some_and(|excl| excl == window_id) {
+            // Skip only the sidebar pane itself, not the whole window
+            if exclude_pane_id.is_some_and(|excl| excl == pane_id) {
                 continue;
             }
 

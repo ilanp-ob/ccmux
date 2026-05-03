@@ -257,10 +257,10 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
         anyhow::bail!("Not inside a tmux session");
     }
 
-    let own_window_id = tmux.own_window_id();
+    let own_pane_id = std::env::var("TMUX_PANE").ok();
     let groups = tmux.list_groups(
         &session,
-        own_window_id.as_deref(),
+        own_pane_id.as_deref(),
         &config.detection.commands,
     )?;
 
