@@ -246,8 +246,29 @@ fn run_sidebar_loop(
     Ok(())
 }
 
-fn run_focus(_n: usize, _server: Option<String>) -> Result<()> {
-    todo!("implemented in Task 15")
+fn run_focus(n: usize, server: Option<String>) -> Result<()> {
+    let config = config::Config::load().unwrap_or_default();
+    let tmux = tmux::Tmux::new(server.clone());
+
+    let session = tmux.current_session()?.unwrap_or_default();
+    if session.is_empty() {
+        anyhow::bail!("Not inside a tmux session");
+    }
+
+    let own_window_id = tmux.own_window_id();
+    let groups = tmux.list_groups(
+        &session,
+        own_window_id.as_deref(),
+        &config.detection.commands,
+    )?;
+
+    let flat: Vec<_> = groups.iter().flat_map(|g| g.panes.iter()).collect();
+    let pane = flat.iter().find(|p| p.display_num == n)
+        .ok_or_else(|| anyhow::anyhow!("No session with number {}", n))?;
+
+    tmux.select_window(&pane.window_id)?;
+    tmux.select_pane(&pane.pane_id)?;
+    Ok(())
 }
 
 fn run_notify_worker(_server: Option<String>) -> Result<()> {
