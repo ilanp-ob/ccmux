@@ -1,6 +1,7 @@
 mod config;
 mod detection;
 mod session;
+mod sidebar;
 mod tmux;
 
 use anyhow::Result;
