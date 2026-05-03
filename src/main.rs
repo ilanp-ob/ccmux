@@ -4,8 +4,15 @@ mod session;
 mod sidebar;
 mod tmux;
 
+use std::io::{self, stdout};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand,
+};
+use ratatui::prelude::*;
 use session::ClaudeCodeStatus;
 
 #[derive(Parser)]
@@ -187,8 +194,56 @@ fn run_toggle(server: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn run_sidebar(_server: Option<String>) -> Result<()> {
-    todo!("implemented in Task 14")
+fn run_sidebar(server: Option<String>) -> Result<()> {
+    let config = config::Config::load()?;
+    let mut app = sidebar::App::new(server, config)?;
+
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
+
+    let result = run_sidebar_loop(&mut terminal, &mut app);
+
+    disable_raw_mode()?;
+    stdout().execute(LeaveAlternateScreen)?;
+
+    result
+}
+
+fn run_sidebar_loop(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut sidebar::App,
+) -> Result<()> {
+    let mut needs_redraw = true;
+
+    loop {
+        if needs_redraw {
+            terminal.draw(|frame| sidebar::render::render(frame, app))?;
+            needs_redraw = false;
+        }
+
+        if app.should_quit {
+            break;
+        }
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                sidebar::input::handle_key(app, key);
+                needs_redraw = true;
+            }
+        }
+
+        if app.refresh() {
+            needs_redraw = true;
+        }
+
+        if app.tick_status() {
+            needs_redraw = true;
+        }
+    }
+
+    Ok(())
 }
 
 fn run_focus(_n: usize, _server: Option<String>) -> Result<()> {
