@@ -166,6 +166,8 @@ fn run_toggle(server: Option<String>) -> Result<()> {
 
     let pane_id = tmux.split_sidebar(&session, config.sidebar.width, &sidebar_cmd)?;
     tmux.set_var(&var_key, &pane_id)?;
+    // Explicitly focus the sidebar pane — run-shell doesn't transfer focus automatically
+    let _ = tmux.select_pane(&pane_id);
 
     // Spawn notify-worker if not already running
     let notify_pid_key = "@ccmux_notify_pid";
