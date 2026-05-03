@@ -1,0 +1,3 @@
+{"type":"server-started","port":57039,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:57039","screen_dir":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/5046-1777805794/content","state_dir":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/5046-1777805794/state"}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/5046-1777805794/content/names.html"}
+{"type":"server-stopped","reason":"idle timeout"}

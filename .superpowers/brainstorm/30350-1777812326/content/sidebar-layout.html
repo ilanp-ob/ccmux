@@ -1,0 +1,73 @@
+<h2>Sidebar Row Layout</h2>
+<p class="subtitle">How much info per Claude session? The sidebar is ~50 chars wide.</p>
+
+<div class="split">
+
+  <div class="mockup">
+    <div class="mockup-header">A — Compact (1 line each)</div>
+    <div class="mockup-body" style="background:#1e1e2e;font-family:monospace;font-size:13px;padding:10px;color:#cdd6f4;line-height:1.8">
+      <div style="color:#6c7086;border-bottom:1px solid #313244;padding-bottom:4px;margin-bottom:6px">■ window: work</div>
+      <div style="background:#313244;padding:2px 4px;border-radius:2px"><span style="color:#a6e3a1">●</span> ops-15619  <span style="color:#94e2d5">feat/fix</span>  <span style="color:#6c7086">%1</span></div>
+      <div style="padding:2px 4px"><span style="color:#f9e2af">◐</span> houston    <span style="color:#94e2d5">main</span>     <span style="color:#6c7086">%2</span></div>
+      <div style="padding:2px 4px"><span style="color:#89dceb">○</span> ccmux      <span style="color:#94e2d5">fix</span>      <span style="color:#6c7086">%3</span></div>
+      <div style="color:#6c7086;border-bottom:1px solid #313244;padding-bottom:4px;margin-top:8px;margin-bottom:6px">■ window: research</div>
+      <div style="padding:2px 4px"><span style="color:#89dceb">○</span> learnings  <span style="color:#94e2d5">main</span>     <span style="color:#6c7086">%4</span></div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B — Two-line (name + preview)</div>
+    <div class="mockup-body" style="background:#1e1e2e;font-family:monospace;font-size:13px;padding:10px;color:#cdd6f4;line-height:1.6">
+      <div style="color:#6c7086;border-bottom:1px solid #313244;padding-bottom:4px;margin-bottom:6px">■ window: work</div>
+      <div style="background:#313244;padding:4px 6px;border-radius:2px;margin-bottom:2px">
+        <div><span style="color:#a6e3a1">●</span> <b>ops-15619</b>  <span style="color:#94e2d5">feat/fix</span></div>
+        <div style="color:#6c7086;font-size:11px;padding-left:14px">Editing src/app.rs…</div>
+      </div>
+      <div style="padding:4px 6px;margin-bottom:2px">
+        <div><span style="color:#f9e2af">◐</span> <b>houston</b>  <span style="color:#94e2d5">main</span></div>
+        <div style="color:#f9e2af;font-size:11px;padding-left:14px">⚠ Waiting for input</div>
+      </div>
+      <div style="padding:4px 6px;margin-bottom:2px">
+        <div><span style="color:#89dceb">○</span> <b>ccmux</b>  <span style="color:#94e2d5">fix</span></div>
+        <div style="color:#6c7086;font-size:11px;padding-left:14px">Idle</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:20px">
+  <div class="mockup">
+    <div class="mockup-header">C — Hybrid: compact by default, expand selected</div>
+    <div class="mockup-body" style="background:#1e1e2e;font-family:monospace;font-size:13px;padding:10px;color:#cdd6f4;line-height:1.6">
+      <div style="color:#6c7086;border-bottom:1px solid #313244;padding-bottom:4px;margin-bottom:6px">■ window: work</div>
+      <div style="padding:2px 4px"><span style="color:#a6e3a1">●</span> ops-15619  <span style="color:#94e2d5">feat/fix</span>  <span style="color:#6c7086">%1</span></div>
+      <div style="background:#313244;border-left:2px solid #f9e2af;padding:6px 8px;margin:2px 0;border-radius:0 2px 2px 0">
+        <div><span style="color:#f9e2af">◐</span> <b>houston</b>  <span style="color:#94e2d5">main</span>  <span style="color:#6c7086">%2</span></div>
+        <div style="color:#6c7086;font-size:11px;margin-top:2px">~/dev/houston</div>
+        <div style="color:#f9e2af;font-size:11px">⚠ Waiting for input — press Enter to focus</div>
+        <div style="margin-top:4px;color:#89b4fa;font-size:11px">[Enter] focus  [K] kill  [r] rename  [w] new worktree</div>
+      </div>
+      <div style="padding:2px 4px"><span style="color:#89dceb">○</span> ccmux  <span style="color:#94e2d5">fix</span>  <span style="color:#6c7086">%3</span></div>
+      <div style="color:#6c7086;border-bottom:1px solid #313244;padding-bottom:4px;margin-top:8px;margin-bottom:6px">■ window: research</div>
+      <div style="padding:2px 4px"><span style="color:#89dceb">○</span> learnings  <span style="color:#94e2d5">main</span>  <span style="color:#6c7086">%4</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="options" style="margin-top:20px">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content"><h3>Compact</h3><p>Dense, fits many sessions, no extra info</p></div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content"><h3>Two-line</h3><p>Always shows a preview/status line below the name</p></div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content"><h3>Hybrid</h3><p>Compact list, selected row expands with full detail + actions</p></div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:16px">Check <b>http://localhost:55213</b> — click A, B, or C.</p>

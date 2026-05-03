@@ -1,0 +1,73 @@
+<h2>ccmux — Architecture</h2>
+<p class="subtitle">Three processes, clean separation of concerns</p>
+
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px">
+
+  <div style="background:#1e1e2e;border:1px solid #313244;border-radius:8px;padding:16px">
+    <div style="color:#89b4fa;font-weight:bold;font-size:14px;margin-bottom:8px">① ccmux sidebar</div>
+    <div style="color:#cdd6f4;font-size:12px;line-height:1.8">
+      Ratatui TUI running in a tmux split pane.<br><br>
+      • Lists all Claude panes, session-wide, grouped by window<br>
+      • Hybrid layout: compact rows, selected expands<br>
+      • Worktree / new window flows<br>
+      • Spawns notify-worker on first open<br>
+      • Refreshes every 500ms
+    </div>
+  </div>
+
+  <div style="background:#1e1e2e;border:1px solid #f9e2af;border-radius:8px;padding:16px">
+    <div style="color:#f9e2af;font-weight:bold;font-size:14px;margin-bottom:8px">② ccmux notify-worker</div>
+    <div style="color:#cdd6f4;font-size:12px;line-height:1.8">
+      Tiny background process, daemonised by sidebar.<br><br>
+      • Polls tmux every 2s<br>
+      • Fires macOS notification on WaitingInput<br>
+      • Sets @ccmux_alert on the tmux window<br>
+      • Clears alert when user focuses pane<br>
+      • Self-exits when session ends
+    </div>
+  </div>
+
+  <div style="background:#1e1e2e;border:1px solid #a6e3a1;border-radius:8px;padding:16px">
+    <div style="color:#a6e3a1;font-weight:bold;font-size:14px;margin-bottom:8px">③ ccmux status</div>
+    <div style="color:#cdd6f4;font-size:12px;line-height:1.8">
+      Fast one-shot subcommand for tmux status-right.<br><br>
+      • Reads pane content, prints ●/◐/○/?<br>
+      • Reads @ccmux_alert → flashes ⚠ when alert set<br>
+      • Called as #(ccmux status --window #{window_id})<br>
+      • Zero startup cost
+    </div>
+  </div>
+
+</div>
+
+<div style="background:#1e1e2e;border:1px solid #313244;border-radius:8px;padding:16px;margin-bottom:20px">
+  <div style="color:#cdd6f4;font-weight:bold;font-size:13px;margin-bottom:10px">Toggle flow (prefix+Tab)</div>
+  <div style="font-family:monospace;font-size:12px;color:#cdd6f4;line-height:2">
+    <span style="color:#89b4fa">tmux.conf:</span> bind Tab run-shell "ccmux toggle"<br>
+    <span style="color:#6c7086">  └→</span> check @ccmux_sidebar_&lt;session&gt;_&lt;window&gt; variable<br>
+    <span style="color:#6c7086">  └→</span> if alive: <span style="color:#f38ba8">tmux kill-pane</span> (hide)<br>
+    <span style="color:#6c7086">  └→</span> if not: <span style="color:#a6e3a1">tmux split-window -hb -l 50 "ccmux sidebar"</span> (show)<br>
+    <span style="color:#6c7086">  └→</span> store new pane ID in @ccmux_sidebar_&lt;session&gt;_&lt;window&gt;
+  </div>
+</div>
+
+<div style="background:#1e1e2e;border:1px solid #313244;border-radius:8px;padding:16px;margin-bottom:20px">
+  <div style="color:#cdd6f4;font-weight:bold;font-size:13px;margin-bottom:10px">State storage — all in tmux variables, no files needed</div>
+  <div style="font-family:monospace;font-size:12px;color:#cdd6f4;line-height:2">
+    <span style="color:#89b4fa">@ccmux_sidebar_&lt;session&gt;_&lt;window&gt;</span>  pane ID of sidebar (per window)<br>
+    <span style="color:#89b4fa">@ccmux_notify_pid</span>                   PID of running notify-worker<br>
+    <span style="color:#89b4fa">@ccmux_alert_&lt;window_id&gt;</span>            1 = this window has a waiting session<br>
+    <span style="color:#89b4fa">@ccmux_color</span>                        colour135 etc (per window, set at creation)
+  </div>
+</div>
+
+<div style="background:#1e1e2e;border:1px solid #313244;border-radius:8px;padding:16px">
+  <div style="color:#cdd6f4;font-weight:bold;font-size:13px;margin-bottom:10px">Multi-server support</div>
+  <div style="font-family:monospace;font-size:12px;color:#cdd6f4;line-height:2">
+    Config lists servers to monitor. Sidebar aggregates panes from all of them.<br>
+    Each tmux command fan-out: default server + any configured extras (-L name).<br>
+    Server label shown in window group headers when multiple servers active.
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:20px">Does this architecture look right? Let me know in the terminal.</p>

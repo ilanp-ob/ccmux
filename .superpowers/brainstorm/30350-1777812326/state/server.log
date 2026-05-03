@@ -1,0 +1,10 @@
+{"type":"server-started","port":55213,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:55213","screen_dir":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content","state_dir":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/state"}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content/names.html"}
+{"source":"user-event","type":"click","text":"$ ccmux toggle\n      │ ● ops-15619  feat/fix\n      │ ◐ houston    main\n    \n    \n      ccmux\n      Keep the existing name. Already familiar. \"mux\" = multiplexer, what tmux does.","choice":"ccmux","id":null,"timestamp":1777812386102}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content/waiting.html"}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content/sidebar-layout.html"}
+{"source":"user-event","type":"click","text":"C\n    HybridCompact list, selected row expands with full detail + actions","choice":"c","id":null,"timestamp":1777812513330}
+{"source":"user-event","type":"click","text":"C\n    HybridCompact list, selected row expands with full detail + actions","choice":"c","id":null,"timestamp":1777812523881}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content/waiting-2.html"}
+{"type":"screen-added","file":"/Users/ilan.peretz/dev/ccmux/.superpowers/brainstorm/30350-1777812326/content/architecture.html"}
+{"type":"server-stopped","reason":"idle timeout"}
