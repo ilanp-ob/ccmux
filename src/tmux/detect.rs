@@ -22,6 +22,34 @@ pub fn classify_command(cmd: &str, configured: &[String]) -> Option<PaneType> {
     None
 }
 
+/// Fallback: check the full executable path via `ps` for versioned binaries
+/// (e.g. Claude Code installs as "2.1.126" but lives at .../claude/versions/2.1.126).
+fn classify_via_ps(pid: &str, configured: &[String]) -> Option<PaneType> {
+    if pid.is_empty() { return None; }
+    let output = std::process::Command::new("ps")
+        .args(["-p", pid, "-o", "command="])
+        .output().ok()?;
+    let full_cmd = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    classify_command_str(&full_cmd, configured)
+}
+
+fn classify_command_str(full_cmd: &str, configured: &[String]) -> Option<PaneType> {
+    for configured_cmd in configured {
+        if full_cmd.contains(&configured_cmd.to_lowercase()) {
+            let t = if configured_cmd.to_lowercase().contains("claude") {
+                PaneType::Claude
+            } else if configured_cmd.to_lowercase().contains("ocli")
+                || configured_cmd.to_lowercase().contains("ops-cli") {
+                PaneType::Ocli
+            } else {
+                PaneType::Other(configured_cmd.clone())
+            };
+            return Some(t);
+        }
+    }
+    None
+}
+
 impl Tmux {
     /// Scan all panes in the tmux session, filter to detected commands,
     /// group by window, and assign sequential display numbers.
@@ -35,7 +63,7 @@ impl Tmux {
             .args([
                 "list-panes", "-s", "-t", session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}",
+                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_pid}",
             ])
             .output()
             .context("tmux list-panes failed")?;
@@ -49,7 +77,7 @@ impl Tmux {
         let mut display_num = 1usize;
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.splitn(7, '\t').collect();
+            let parts: Vec<&str> = line.splitn(8, '\t').collect();
             if parts.len() < 7 { continue; }
 
             let pane_id     = parts[0].to_string();
@@ -59,12 +87,17 @@ impl Tmux {
             let window_index = parts[4].to_string();
             let pane_active = parts[5] == "1";
             let current_path = PathBuf::from(parts[6]);
+            let pane_pid    = parts.get(7).unwrap_or(&"").trim().to_string();
 
             if exclude_window_id.is_some_and(|excl| excl == window_id) {
                 continue;
             }
 
-            let Some(pane_type) = classify_command(&command, configured_commands) else {
+            // First try matching pane_current_command; fall back to full process path via ps
+            // (needed for versioned binaries like claude's "2.1.126")
+            let pane_type = classify_command(&command, configured_commands)
+                .or_else(|| classify_via_ps(&pane_pid, configured_commands));
+            let Some(pane_type) = pane_type else {
                 continue;
             };
 
