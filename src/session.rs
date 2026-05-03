@@ -1,178 +1,71 @@
 use std::path::PathBuf;
 
-use crate::git::GitContext;
-
-/// Status of a Claude Code instance in a pane
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaudeCodeStatus {
-    /// Waiting at prompt, ready for input
-    Idle,
-    /// Actively processing a request
     Working,
-    /// Awaiting user confirmation/input (y/n prompt, etc.)
     WaitingInput,
-    /// Cannot determine status
-    #[default]
+    Idle,
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+impl ClaudeCodeStatus {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Working => "●",
+            Self::WaitingInput => "◐",
+            Self::Idle => "○",
+            Self::Unknown => "?",
+        }
+    }
+
+    pub fn needs_attention(&self) -> bool {
+        matches!(self, Self::WaitingInput)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneType {
-    #[default]
     Claude,
     Ocli,
+    Other(String),
 }
 
-impl PaneType {
-    #[allow(dead_code)]
-    pub fn label(&self) -> &'static str {
-        match self {
-            PaneType::Claude => "claude",
-            PaneType::Ocli => "ocli",
-        }
-    }
-}
-
-impl ClaudeCodeStatus {
-    /// Returns the display symbol for this status
-    pub fn symbol(&self) -> &'static str {
-        match self {
-            ClaudeCodeStatus::Idle => "○",
-            ClaudeCodeStatus::Working => "●",
-            ClaudeCodeStatus::WaitingInput => "◐",
-            ClaudeCodeStatus::Unknown => "?",
-        }
-    }
-
-    /// Returns the display label for this status
-    pub fn label(&self) -> &'static str {
-        match self {
-            ClaudeCodeStatus::Idle => "idle",
-            ClaudeCodeStatus::Working => "working",
-            ClaudeCodeStatus::WaitingInput => "input",
-            ClaudeCodeStatus::Unknown => "unknown",
-        }
-    }
-}
-
-/// A tmux pane within a session
+/// A single tmux pane running a detected command (claude, ocli, etc.)
 #[derive(Debug, Clone)]
-pub struct Pane {
-    /// Pane ID (e.g., "%0")
-    pub id: String,
-    /// Current command running in the pane
-    pub current_command: String,
-    /// Current working directory
-    pub current_path: PathBuf,
-    /// Window index this pane belongs to (e.g., "0", "1")
-    pub window_index: String,
-    /// Window name this pane belongs to
-    pub window_name: String,
-}
-
-/// A tmux window that may contain a Claude Code instance
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct Session {
-    /// Window name
-    pub name: String,
-    /// Window ID (e.g., "@2") — used for reliable tmux targeting
+pub struct DetectedPane {
+    /// tmux pane ID, e.g. "%12"
+    pub pane_id: String,
+    /// tmux window ID, e.g. "@5"
     pub window_id: String,
-    /// Unix timestamp of last window activity
-    pub created: i64,
-    /// Whether this is the currently active window
-    pub attached: bool,
-    /// Working directory (from the Claude Code pane, or first pane)
-    pub working_directory: PathBuf,
-    /// Number of windows in this session
-    pub window_count: usize,
-    /// All panes in this session
-    pub panes: Vec<Pane>,
-    /// Pane ID containing Claude Code, if any
-    pub claude_code_pane: Option<String>,
-    /// Type of detected pane (Claude or ocli)
+    pub window_name: String,
+    /// tmux window index (for targeting)
+    pub window_index: String,
+    /// true if this pane currently has keyboard focus
+    pub pane_active: bool,
+    pub current_command: String,
+    pub current_path: PathBuf,
     pub pane_type: PaneType,
-    /// Status of Claude Code in this session
-    pub claude_code_status: ClaudeCodeStatus,
-    /// Window label to show next to the session name, used when a session
-    /// has multiple claude panes and is shown as multiple rows.
-    pub window_label: Option<String>,
-    /// Window index to target when switching, if this row represents a
-    /// specific claude pane within a multi-pane session.
-    pub target_window_index: Option<String>,
-    /// Git context, if the working directory is a git repository
-    pub git_context: Option<GitContext>,
-    /// tmux server name (socket name), if not the default server
+    pub status: ClaudeCodeStatus,
+    /// None = default tmux server; Some(name) = tmux -L name
     pub server: Option<String>,
+    /// sequential display number assigned at render time (1-based)
+    pub display_num: usize,
 }
 
-impl Session {
-    /// Returns the name to display in the session list. Includes a
-    /// `:window` suffix when this row represents a specific claude pane
-    /// within a session that has multiple claude instances.
-    pub fn display_name(&self) -> String {
-        match &self.window_label {
-            Some(label) => format!("{}:{}", self.name, label),
-            None => self.name.clone(),
-        }
+impl DetectedPane {
+    pub fn git_branch(&self) -> Option<String> {
+        let repo = git2::Repository::discover(&self.current_path).ok()?;
+        let head = repo.head().ok()?;
+        head.shorthand().map(|s| s.to_string())
     }
+}
 
-    /// Returns the tmux switch target.
-    ///
-    /// Prefers the claude pane id (e.g. `%42`) when known: tmux resolves a
-    /// pane-id target through the full session/window/pane hierarchy, so a
-    /// single `switch-client -t %42` lands the client on the exact pane.
-    /// Falls back to `name:window_index`, then to the bare session name.
-    pub fn switch_target(&self) -> String {
-        // Prefer pane ID — tmux resolves it across session/window/pane hierarchy
-        if let Some(pane_id) = &self.claude_code_pane {
-            return pane_id.clone();
-        }
-        // Window ID (@N) is globally unique and unaffected by automatic-rename
-        if !self.window_id.is_empty() {
-            return self.window_id.clone();
-        }
-        match &self.target_window_index {
-            Some(idx) => format!("{}:{}", self.name, idx),
-            None => self.name.clone(),
-        }
-    }
-
-    /// Returns a shortened version of the working directory for display
-    pub fn display_path(&self) -> String {
-        let path = &self.working_directory;
-
-        // Try to replace home directory with ~
-        if let Some(home) = dirs::home_dir() {
-            if let Ok(stripped) = path.strip_prefix(&home) {
-                return format!("~/{}", stripped.display());
-            }
-        }
-
-        path.display().to_string()
-    }
-
-    /// Returns a human-readable duration since session creation
-    pub fn duration(&self) -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let elapsed_secs = (now - self.created).max(0) as u64;
-
-        let days = elapsed_secs / 86400;
-        let hours = (elapsed_secs % 86400) / 3600;
-        let minutes = (elapsed_secs % 3600) / 60;
-
-        if days > 0 {
-            format!("{}d {}h", days, hours)
-        } else if hours > 0 {
-            format!("{}h {}m", hours, minutes)
-        } else {
-            format!("{}m", minutes.max(1))
-        }
-    }
+/// All detected panes in a single tmux window, from one server
+#[derive(Debug, Clone)]
+pub struct WindowGroup {
+    pub window_id: String,
+    pub window_name: String,
+    /// None = default server
+    pub server: Option<String>,
+    pub panes: Vec<DetectedPane>,
 }
