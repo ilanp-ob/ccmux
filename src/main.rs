@@ -1,5 +1,7 @@
 mod config;
 mod detection;
+mod git;
+mod notify;
 mod session;
 mod sidebar;
 mod tmux;
@@ -321,8 +323,9 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn run_notify_worker(_server: Option<String>) -> Result<()> {
-    todo!("implemented in Plan 4")
+fn run_notify_worker(server: Option<String>) -> Result<()> {
+    notify::run(server);
+    Ok(())
 }
 
 fn run_close(server: Option<String>) -> Result<()> {
