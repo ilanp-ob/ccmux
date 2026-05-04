@@ -540,14 +540,14 @@ impl App {
                 self.message = Some(format!("✓ Switched to existing worktree: {}", folder));
                 // Apply options to the already-open window then return.
                 if !tmux_colour.is_empty() { let _ = tmux.set_window_color(&wid, tmux_colour); }
+                if opts.open_vscode {
+                    if !hex.is_empty() { Self::write_vscode_color(&wt, hex); }
+                    Self::spawn_vscode(&wt);
+                }
                 if opts.launch_claude {
                     let model = AVAILABLE_MODELS[opts.model_idx];
                     let effort = AVAILABLE_EFFORTS[opts.effort_idx];
                     let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {}", model, effort));
-                }
-                if opts.open_vscode {
-                    if !hex.is_empty() { Self::write_vscode_color(&wt, hex); }
-                    let _ = tmux.send_keys(&wid, "code .");
                 }
                 self.mode = crate::sidebar::mode::Mode::Normal;
                 let _ = self.refresh();
@@ -605,21 +605,32 @@ impl App {
                 r.parent().unwrap_or(&r).join(folder)
             });
 
-        if opts.open_vscode && !hex.is_empty() {
-            Self::write_vscode_color(&wt_path_buf, hex);
+        // VS Code is a GUI app — spawn it directly (invisible, no terminal output).
+        // Claude must use send_keys because it's an interactive TUI in the terminal.
+        if opts.open_vscode {
+            if !hex.is_empty() { Self::write_vscode_color(&wt_path_buf, hex); }
+            Self::spawn_vscode(&wt_path_buf);
         }
         if opts.launch_claude {
             let model = AVAILABLE_MODELS[opts.model_idx];
             let effort = AVAILABLE_EFFORTS[opts.effort_idx];
             let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {}", model, effort));
         }
-        if opts.open_vscode {
-            let _ = tmux.send_keys(&window_id, "code .");
-        }
 
         self.message = Some(format!("✓ Worktree ready: {}", folder));
         self.mode = crate::sidebar::mode::Mode::Normal;
         let _ = self.refresh();
+    }
+
+    /// Launch VS Code on `path` silently in the background.
+    /// Uses `open -a "Visual Studio Code"` on macOS (no terminal output).
+    fn spawn_vscode(path: &std::path::Path) {
+        let _ = std::process::Command::new("open")
+            .args(["-a", "Visual Studio Code", path.to_string_lossy().as_ref()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
 
     fn write_vscode_color(path: &std::path::Path, hex: &str) {
