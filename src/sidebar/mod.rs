@@ -217,7 +217,7 @@ impl App {
 
     /// Update Claude status via content-change detection. Returns true if any status changed.
     pub fn tick_status(&mut self) -> bool {
-        if self.last_status_tick.elapsed() < Duration::from_millis(500) {
+        if self.last_status_tick.elapsed() < Duration::from_millis(self.config.sidebar.status_ms) {
             return false;
         }
         self.last_status_tick = Instant::now();
@@ -366,7 +366,7 @@ impl App {
 
     /// Poll whether the sidebar pane is still the active tmux pane. Returns true if changed.
     pub fn tick_focus(&mut self) -> bool {
-        if self.last_focus_tick.elapsed() < Duration::from_millis(300) {
+        if self.last_focus_tick.elapsed() < Duration::from_millis(1000) {
             return false;
         }
         self.last_focus_tick = Instant::now();
@@ -388,7 +388,7 @@ impl App {
     /// Check for a nav-hint set by another sidebar telling us which pane to select.
     /// Returns true if selection changed.
     pub fn tick_nav_hint(&mut self) -> bool {
-        if self.last_nav_hint_tick.elapsed() < Duration::from_millis(300) {
+        if self.last_nav_hint_tick.elapsed() < Duration::from_millis(1000) {
             return false;
         }
         self.last_nav_hint_tick = Instant::now();

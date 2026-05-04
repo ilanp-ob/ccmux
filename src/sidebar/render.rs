@@ -36,7 +36,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     frame.render_widget(block, area);
 
     let footer_h = match app.mode {
-        Mode::Normal | Mode::ActionHints => 2,
+        Mode::Normal | Mode::ActionHints => 3,
         Mode::Compose { .. } => 3,
         Mode::Rename { .. } => 2,
         _ => 1,
@@ -407,11 +407,18 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 Paragraph::new(vec![
                     Line::from(vec![
                         key("j/k"), hint(" nav"), sep(),
-                        key("1-9"), hint(" jump (×2 focus)"), sep(),
-                        key("K"), hint(" kill"),
+                        key("Enter"), hint(" focus"), sep(),
+                        key("1-9"), hint(" jump"),
                     ]),
                     Line::from(vec![
                         key("i"), hint(" send"), sep(),
+                        key("l"), hint(" actions"), sep(),
+                        key("w"), hint(" worktree"), sep(),
+                        key("n"), hint(" new"), sep(),
+                        key("r"), hint(" rename"), sep(),
+                        key("K"), hint(" kill"),
+                    ]),
+                    Line::from(vec![
                         key("s"), hint(" sticky"), sep(),
                         key("?"), hint(" help"), sep(),
                         key("q"), hint(" quit"),

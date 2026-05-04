@@ -23,11 +23,22 @@ pub struct Config {
 pub struct SidebarConfig {
     pub width: u16,
     pub position: String,
+    /// How often to reload the pane list (ms). Default 5000.
     pub refresh_ms: u64,
+    /// How often to refresh Claude status icons (ms). Default 5000.
+    pub status_ms: u64,
     pub sticky: bool,
 }
 impl Default for SidebarConfig {
-    fn default() -> Self { Self { width: 50, position: "left".into(), refresh_ms: 2000, sticky: false } }
+    fn default() -> Self {
+        Self {
+            width: 50,
+            position: "left".into(),
+            refresh_ms: 5000,
+            status_ms: 5000,
+            sticky: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
