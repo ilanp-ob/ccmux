@@ -47,6 +47,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_list(frame, app, chunks[0], sidebar_bg);
     render_footer(frame, app, chunks[1]);
 
+    if matches!(app.mode, Mode::Help) {
+        render_help_overlay(frame, inner);
+    }
+
     if app.error.is_some() || app.message.is_some() {
         render_message_bar(frame, app, area);
     }
@@ -426,6 +430,67 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             );
         }
     }
+}
+
+fn render_help_overlay(frame: &mut Frame, area: Rect) {
+    fn row<'a>(k: &'a str, desc: &'a str) -> Line<'a> {
+        Line::from(vec![
+            Span::styled(format!("  {:>6}  ", k), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(desc, Style::default().fg(Color::White)),
+        ])
+    }
+    fn section(title: &str) -> Line {
+        Line::from(Span::styled(
+            format!("  {}", title),
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        ))
+    }
+
+    let lines: Vec<Line> = vec![
+        section("Navigation"),
+        row("j / ↓",  "Select next session"),
+        row("k / ↑",  "Select previous session"),
+        row("1–9",    "Jump to session by number (×2 to focus)"),
+        row("Enter",  "Preview window (×2 to focus pane)"),
+        Line::raw(""),
+        section("Actions"),
+        row("i",      "Send message to Claude session"),
+        row("l",      "Action menu (PR ops, delete worktree)"),
+        row("n",      "New tmux window"),
+        row("w",      "New worktree (fetch → branch → options)"),
+        row("r",      "Rename current window"),
+        row("K",      "Kill current window (confirm)"),
+        Line::raw(""),
+        section("Sidebar"),
+        row("s",      "Toggle sticky — auto-open sidebar when"),
+        row("",       "  switching to Claude windows"),
+        row("q / Esc","Close sidebar"),
+        row("?",      "This help screen"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "  Press ? or Esc to close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let overlay = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(h),
+        width: area.width,
+        height: h,
+    };
+
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" Help ")
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
 }
 
 fn render_message_bar(frame: &mut Frame, app: &App, area: Rect) {
