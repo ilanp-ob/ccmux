@@ -7,7 +7,9 @@ use ratatui::{
 };
 
 use crate::session::ClaudeCodeStatus;
+use crate::config::{WINDOW_COLORS, AVAILABLE_MODELS, AVAILABLE_EFFORTS};
 use super::{App, Mode};
+use super::mode::WorktreeStep;
 
 // Alternating-row background for unfocused sidebar
 const ALT_BG: Color = Color::Rgb(28, 30, 36);
@@ -36,6 +38,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_h = match app.mode {
         Mode::Normal | Mode::ActionHints => 2,
         Mode::Compose { .. } => 3,
+        Mode::Rename { .. } => 2,
         _ => 1,
     };
 
@@ -49,6 +52,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if matches!(app.mode, Mode::Help) {
         render_help_overlay(frame, inner);
+    }
+
+    match &app.mode {
+        Mode::Rename { .. } => render_rename_overlay(frame, app, inner),
+        Mode::NewWindow { .. } => render_new_window_overlay(frame, app, inner),
+        Mode::ActionMenu { .. } => render_action_menu_overlay(frame, app, inner),
+        Mode::WorktreeFlow(_) => render_worktree_overlay(frame, app, inner),
+        _ => {}
     }
 
     if app.error.is_some() || app.message.is_some() {
@@ -442,7 +453,48 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 area,
             );
         }
-        _ => {}
+        Mode::Rename { text } => {
+            let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(vec![
+                        Span::styled("Rename: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(text.as_str(), Style::default().fg(Color::White)),
+                        cursor,
+                    ]),
+                    Line::from(vec![
+                        key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
+                    ]),
+                ]),
+                area,
+            );
+        }
+        Mode::NewWindow { .. } => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    key("Tab"), hint(" next field  "), key("Enter"), hint(" create  "), key("Esc"), hint(" cancel"),
+                ])),
+                area,
+            );
+        }
+        Mode::ActionMenu { .. } => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    key("j/k"), hint(" navigate  "), key("Enter"), hint(" select  "), key("Esc"), hint(" cancel"),
+                ])),
+                area,
+            );
+        }
+        Mode::WorktreeFlow(WorktreeStep::Fetching) => {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    hint("  Fetching branches…  "),
+                    key("Esc"), hint(" cancel"),
+                ])),
+                area,
+            );
+        }
+        Mode::WorktreeFlow(_) => {}
     }
 }
 
@@ -515,6 +567,399 @@ fn render_message_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         Paragraph::new(format!(" {}", msg)).style(Style::default().fg(color)),
         bar_area,
+    );
+}
+
+fn overlay_rect(area: Rect, content_lines: usize) -> Rect {
+    let h = (content_lines as u16 + 2).min(area.height);
+    Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(h),
+        width: area.width,
+        height: h,
+    }
+}
+
+fn render_rename_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    let text = match &app.mode {
+        Mode::Rename { text } => text.as_str(),
+        _ => return,
+    };
+
+    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+    let lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  Rename: ", Style::default().fg(Color::Cyan)),
+            Span::styled(text, Style::default().fg(Color::White)),
+            cursor,
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
+        ]),
+    ];
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" Rename window ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
+}
+
+fn render_new_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    let (name, color_idx, launch_claude, field) = match &app.mode {
+        Mode::NewWindow { name, color_idx, launch_claude, field } =>
+            (name.as_str(), *color_idx, *launch_claude, *field),
+        _ => return,
+    };
+
+    let color_name = WINDOW_COLORS.get(color_idx).map(|c| c.0).unwrap_or("none");
+    let check = if launch_claude { "[x]" } else { "[ ]" };
+
+    let field_style = |f: u8| -> (Style, Style) {
+        if field == f {
+            (
+                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::White),
+            )
+        } else {
+            (
+                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Rgb(100, 100, 110)),
+            )
+        }
+    };
+
+    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+
+    let (label0, val0) = field_style(0);
+    let (label1, val1) = field_style(1);
+    let (label2, val2) = field_style(2);
+
+    let name_span: Vec<Span> = if field == 0 {
+        vec![
+            Span::styled("  Name:    ", label0),
+            Span::styled(name, val0),
+            cursor,
+        ]
+    } else {
+        vec![
+            Span::styled("  Name:    ", label0),
+            Span::styled(name, val0),
+        ]
+    };
+
+    let lines: Vec<Line> = vec![
+        Line::from(name_span),
+        Line::from(vec![
+            Span::styled("  Color:   ", label1),
+            Span::styled("◀ ", val1),
+            Span::styled(color_name, val1),
+            Span::styled(" ▶", val1),
+        ]),
+        Line::from(vec![
+            Span::styled("  Claude:  ", label2),
+            Span::styled(format!("{} Launch claude", check), val2),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            key("Tab"), hint(" next field  "), key("Enter"), hint(" create  "), key("Esc"), hint(" cancel"),
+        ]),
+    ];
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" New window ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
+}
+
+fn render_action_menu_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    let (items, cursor) = match &app.mode {
+        Mode::ActionMenu { items, cursor } => (items, *cursor),
+        _ => return,
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let fill_width = area.width as usize;
+
+    for (i, item) in items.iter().enumerate() {
+        let label = item.label();
+        if i == cursor {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {}  {}", "▶", label),
+                    Style::default().fg(Color::Cyan).bg(SEL_BG),
+                ),
+                Span::styled(" ".repeat(fill_width), Style::default().bg(SEL_BG)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", label),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        key("j/k"), hint(" navigate  "), key("Enter"), hint(" select  "), key("Esc"), hint(" cancel"),
+    ]));
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" Actions ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
+}
+
+fn render_worktree_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    match &app.mode {
+        Mode::WorktreeFlow(step) => match step {
+            WorktreeStep::Fetching => {
+                // Handled in render_footer; no overlay needed.
+            }
+            WorktreeStep::BranchSelect {
+                branches, filter, cursor, entering_new, new_branch_text, ..
+            } => {
+                render_branch_select_overlay(frame, area, branches, filter, *cursor, *entering_new, new_branch_text);
+            }
+            WorktreeStep::FolderName { folder, .. } => {
+                render_folder_name_overlay(frame, area, folder);
+            }
+            WorktreeStep::Options { opts, .. } => {
+                render_options_overlay(frame, area, opts);
+            }
+            WorktreeStep::Executing { status } => {
+                // Show a simple status message in the footer area (bottom 1 row).
+                let h = 1u16;
+                let footer_area = Rect {
+                    x: area.x,
+                    y: area.y + area.height.saturating_sub(h),
+                    width: area.width,
+                    height: h,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(format!("  {}", status), Style::default().fg(Color::DarkGray)),
+                    ])),
+                    footer_area,
+                );
+            }
+        },
+        _ => {}
+    }
+}
+
+fn render_branch_select_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    branches: &[crate::git::BranchEntry],
+    filter: &str,
+    cursor: usize,
+    entering_new: bool,
+    new_branch_text: &str,
+) {
+    // Use the full inner area for this overlay.
+    let overlay = area;
+    let cursor_char = Span::styled("█", Style::default().fg(Color::Cyan));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if entering_new {
+        lines.push(Line::from(vec![
+            Span::styled("  New branch: ", Style::default().fg(Color::Cyan)),
+            Span::styled(new_branch_text, Style::default().fg(Color::White)),
+            cursor_char,
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            key("Enter"), hint(" create  "), key("Tab"), hint("/"), key("F"), hint(" existing  "), key("Esc"), hint(" cancel"),
+        ]));
+    } else {
+        // Filter line
+        lines.push(Line::from(vec![
+            Span::styled("  Filter: ", Style::default().fg(Color::Cyan)),
+            Span::styled(filter, Style::default().fg(Color::White)),
+            cursor_char,
+        ]));
+
+        // Filtered branch list
+        let filtered: Vec<&crate::git::BranchEntry> = branches.iter()
+            .filter(|b| filter.is_empty() || b.name.contains(filter))
+            .collect();
+
+        // How many rows we can show (overlay height - 2 borders - filter line - hint line)
+        let max_rows = (overlay.height as usize).saturating_sub(4);
+
+        // Scroll to keep cursor visible
+        let start = if cursor >= max_rows { cursor + 1 - max_rows } else { 0 };
+        let visible = filtered.iter().skip(start).take(max_rows);
+
+        for (i, branch) in visible.enumerate() {
+            let abs_idx = start + i;
+            let is_sel = abs_idx == cursor;
+            let suffix = if branch.worktree_path.is_some() {
+                " (worktree)"
+            } else {
+                ""
+            };
+            let label = format!("  {}{}", branch.name, suffix);
+
+            if is_sel {
+                let fill_width = overlay.width as usize;
+                lines.push(Line::from(vec![
+                    Span::styled(label, Style::default().fg(Color::Cyan).bg(SEL_BG)),
+                    Span::styled(" ".repeat(fill_width), Style::default().bg(SEL_BG)),
+                ]));
+            } else if branch.worktree_path.is_some() {
+                // Show worktree suffix dimmed
+                let base = format!("  {}", branch.name);
+                lines.push(Line::from(vec![
+                    Span::styled(base, Style::default().fg(Color::DarkGray)),
+                    Span::styled(" (worktree)", Style::default().fg(Color::Rgb(60, 60, 70))),
+                ]));
+            } else {
+                lines.push(Line::from(Span::styled(label, Style::default().fg(Color::DarkGray))));
+            }
+        }
+
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            key("j/k"), hint(" nav  "), key("Enter"), hint(" select  "), key("F"), hint(" new branch  "), key("Esc"), hint(" cancel"),
+        ]));
+    }
+
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" New worktree — select branch ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
+}
+
+fn render_folder_name_overlay(frame: &mut Frame, area: Rect, folder: &str) {
+    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+    let lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  Folder: ", Style::default().fg(Color::Cyan)),
+            Span::styled(folder, Style::default().fg(Color::White)),
+            cursor,
+        ]),
+        Line::from(Span::styled(
+            "  (created alongside the main repo)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(vec![
+            Span::raw("  "),
+            key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
+        ]),
+    ];
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" New worktree — folder name ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
+}
+
+fn render_options_overlay(frame: &mut Frame, area: Rect, opts: &crate::sidebar::mode::WorktreeOpts) {
+    let field_style = |f: u8| -> (Style, Style) {
+        if opts.field == f {
+            (
+                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::White),
+            )
+        } else {
+            (
+                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Rgb(100, 100, 110)),
+            )
+        }
+    };
+
+    let model_name = AVAILABLE_MODELS.get(opts.model_idx).copied().unwrap_or("?");
+    let effort_name = AVAILABLE_EFFORTS.get(opts.effort_idx).copied().unwrap_or("?");
+    let color_name = WINDOW_COLORS.get(opts.color_idx).map(|c| c.0).unwrap_or("none");
+    let claude_check = if opts.launch_claude { "[x]" } else { "[ ]" };
+    let vscode_check = if opts.open_vscode { "[x]" } else { "[ ]" };
+
+    let (lm, vm) = field_style(0);
+    let (le, ve) = field_style(1);
+    let (lc, vc) = field_style(2);
+    let (lcol, vcol) = field_style(3);
+    let (lv, vv) = field_style(4);
+
+    let lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  Model:   ", lm),
+            Span::styled("◀ ", vm),
+            Span::styled(model_name, vm),
+            Span::styled(" ▶", vm),
+        ]),
+        Line::from(vec![
+            Span::styled("  Effort:  ", le),
+            Span::styled("◀ ", ve),
+            Span::styled(effort_name, ve),
+            Span::styled(" ▶", ve),
+        ]),
+        Line::from(vec![
+            Span::styled("  Claude:  ", lc),
+            Span::styled(format!("{} Launch claude", claude_check), vc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Color:   ", lcol),
+            Span::styled("◀ ", vcol),
+            Span::styled(color_name, vcol),
+            Span::styled(" ▶", vcol),
+        ]),
+        Line::from(vec![
+            Span::styled("  VSCode:  ", lv),
+            Span::styled(format!("{} Open VSCode", vscode_check), vv),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            key("Tab"), hint(" next  "), key("◀▶"), hint(" cycle  "), key("Space"), hint(" toggle  "), key("Enter"), hint(" create"),
+        ]),
+    ];
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(" New worktree — options ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
     );
 }
 
