@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use anyhow::{Context, Result};
 use crate::session::{ClaudeCodeStatus, DetectedPane, PaneType, WindowGroup};
-use crate::detection::detect_status;
 use super::Tmux;
 
 /// Return the PaneType if this command should be tracked, else None.
@@ -121,9 +120,9 @@ impl Tmux {
                 continue;
             }
 
-            let status = self.capture_pane(&pane_id, 30, true)
-                .map(|c| detect_status(&c))
-                .unwrap_or(ClaudeCodeStatus::Unknown);
+            // Status is filled in by tick_status() — skip capture_pane here so
+            // refresh() stays fast and never blocks the event loop for multiple panes.
+            let status = ClaudeCodeStatus::Unknown;
 
             let pane = DetectedPane {
                 pane_id,
