@@ -468,7 +468,7 @@ fn run_setup(server: Option<String>) -> Result<()> {
     for hook in hooks {
         tmux.cmd()
             .args(["set-hook", "-g", hook,
-                   &format!("run-shell '{}'", auto_open_cmd)])
+                   &format!("run-shell -b '{}'", auto_open_cmd)])
             .status()?;
         println!("✓ Installed hook: {}", hook);
     }
@@ -483,7 +483,7 @@ fn run_setup(server: Option<String>) -> Result<()> {
     println!("To persist across tmux restarts, add to ~/.tmux.conf:");
     println!();
     for hook in hooks {
-        println!("  set-hook -g {} \"run-shell '{}'\"", hook, auto_open_cmd);
+        println!("  set-hook -g {} \"run-shell -b '{}'\"", hook, auto_open_cmd);
     }
     println!();
     println!("To disable:  ccmux close  (closes all sidebars)");
