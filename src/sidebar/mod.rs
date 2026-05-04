@@ -499,67 +499,125 @@ impl App {
         }));
     }
 
-    /// Execute worktree creation after user confirms options.
+    /// Execute worktree creation (or open an existing one) after user confirms options.
+    /// `existing_wt_path` is `Some` when the worktree already exists — skips `git worktree add`
+    /// and instead finds or opens a tmux window at that path.
     pub fn execute_worktree(
         &mut self,
         repo_root: &str,
         branch: &str,
         folder: &str,
         opts: &crate::sidebar::mode::WorktreeOpts,
+        existing_wt_path: Option<&str>,
     ) {
         use crate::config::{AVAILABLE_MODELS, AVAILABLE_EFFORTS, WINDOW_COLORS};
 
-        self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
-            crate::sidebar::mode::WorktreeStep::Executing {
-                status: "Creating worktree…".into(),
-            },
-        );
-
-        let repo_path = std::path::PathBuf::from(repo_root);
-        let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
-        let worktree_path = parent.join(folder);
-
-        if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch) {
-            self.error = Some(format!("Worktree error: {}", e));
-            self.mode = crate::sidebar::mode::Mode::Normal;
-            return;
-        }
-
         let tmux = Tmux::new(self.managed_server.clone());
-        let window_name = worktree_path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| folder.to_string());
+        let (_, hex, tmux_colour) = WINDOW_COLORS[opts.color_idx];
 
-        let window_id = match tmux.new_window(&self.managed_session, &window_name, &worktree_path) {
-            Ok(id) => id,
-            Err(e) => {
-                self.error = Some(format!("Window error: {}", e));
+        let window_id = if let Some(wt_path) = existing_wt_path {
+            // Existing worktree — find or open a window there without running git worktree add.
+            let wt = std::path::PathBuf::from(wt_path);
+
+            // Try to find an existing tmux window with a pane inside the worktree.
+            let found = tmux.cmd()
+                .args(["list-panes", "-s", "-t", &self.managed_session,
+                       "-F", "#{window_id}\t#{pane_current_path}"])
+                .output()
+                .ok()
+                .and_then(|out| {
+                    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+                    stdout.lines().find_map(|line| {
+                        let mut p = line.splitn(2, '\t');
+                        let wid = p.next()?.trim().to_string();
+                        let ppath = p.next()?.trim().to_string();
+                        if ppath.starts_with(wt_path) { Some(wid) } else { None }
+                    })
+                });
+
+            if let Some(wid) = found {
+                let _ = tmux.select_window(&wid);
+                self.message = Some(format!("✓ Switched to existing worktree: {}", folder));
+                // Apply options to the already-open window then return.
+                if !tmux_colour.is_empty() { let _ = tmux.set_window_color(&wid, tmux_colour); }
+                if opts.launch_claude {
+                    let model = AVAILABLE_MODELS[opts.model_idx];
+                    let effort = AVAILABLE_EFFORTS[opts.effort_idx];
+                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {}", model, effort));
+                }
+                if opts.open_vscode {
+                    if !hex.is_empty() { Self::write_vscode_color(&wt, hex); }
+                    let _ = tmux.send_keys(&wid, "code .");
+                }
+                self.mode = crate::sidebar::mode::Mode::Normal;
+                let _ = self.refresh();
+                return;
+            }
+
+            // No window open — create one (no git worktree add needed).
+            let window_name = wt.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| folder.to_string());
+            match tmux.new_window(&self.managed_session, &window_name, &wt) {
+                Ok(id) => id,
+                Err(e) => {
+                    self.error = Some(format!("Window error: {}", e));
+                    self.mode = crate::sidebar::mode::Mode::Normal;
+                    return;
+                }
+            }
+        } else {
+            // New worktree — create it first.
+            self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
+                crate::sidebar::mode::WorktreeStep::Executing { status: "Creating worktree…".into() },
+            );
+
+            let repo_path = std::path::PathBuf::from(repo_root);
+            let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
+            let worktree_path = parent.join(folder);
+
+            if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch) {
+                self.error = Some(format!("Worktree error: {}", e));
                 self.mode = crate::sidebar::mode::Mode::Normal;
                 return;
             }
+
+            let window_name = worktree_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| folder.to_string());
+            match tmux.new_window(&self.managed_session, &window_name, &worktree_path) {
+                Ok(id) => id,
+                Err(e) => {
+                    self.error = Some(format!("Window error: {}", e));
+                    self.mode = crate::sidebar::mode::Mode::Normal;
+                    return;
+                }
+            }
         };
 
-        let (_, hex, tmux_colour) = WINDOW_COLORS[opts.color_idx];
-        if !tmux_colour.is_empty() {
-            let _ = tmux.set_window_color(&window_id, tmux_colour);
-        }
+        // Apply options to the new/found window.
+        if !tmux_colour.is_empty() { let _ = tmux.set_window_color(&window_id, tmux_colour); }
+
+        let wt_path_buf = existing_wt_path
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                let r = std::path::PathBuf::from(repo_root);
+                r.parent().unwrap_or(&r).join(folder)
+            });
 
         if opts.open_vscode && !hex.is_empty() {
-            Self::write_vscode_color(&worktree_path, hex);
+            Self::write_vscode_color(&wt_path_buf, hex);
         }
-
         if opts.launch_claude {
             let model = AVAILABLE_MODELS[opts.model_idx];
             let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-            let cmd = format!("claude --model {} --effort {}", model, effort);
-            let _ = tmux.send_keys(&window_id, &cmd);
+            let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {}", model, effort));
         }
-
         if opts.open_vscode {
             let _ = tmux.send_keys(&window_id, "code .");
         }
 
-        self.message = Some(format!("✓ Worktree created: {}", folder));
+        self.message = Some(format!("✓ Worktree ready: {}", folder));
         self.mode = crate::sidebar::mode::Mode::Normal;
         let _ = self.refresh();
     }

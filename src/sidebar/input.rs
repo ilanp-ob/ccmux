@@ -306,8 +306,8 @@ fn handle_worktree(app: &mut App, key: KeyEvent) {
             handle_worktree_folder_name(app, key, repo_root, branch, folder);
         }
 
-        WorktreeStep::Options { repo_root, branch, folder, opts } => {
-            handle_worktree_options(app, key, repo_root, branch, folder, opts);
+        WorktreeStep::Options { repo_root, branch, folder, opts, existing_wt_path } => {
+            handle_worktree_options(app, key, repo_root, branch, folder, opts, existing_wt_path);
         }
 
         WorktreeStep::Executing { .. } => {
@@ -419,14 +419,25 @@ fn handle_worktree_branch_select(
                 (entry.name.clone(), entry.worktree_path.clone())
             };
 
-            // Branch already has a worktree — navigate to it rather than re-creating.
+            let repo_path = std::path::PathBuf::from(&repo_root);
+
             if let Some(wt_path) = existing_wt {
-                app.navigate_to_existing_worktree(&wt_path);
-                app.mode = Mode::Normal;
+                // Worktree exists — skip FolderName but still show Options so the
+                // user can choose to launch Claude, open VS Code, etc.
+                let folder = std::path::Path::new(&wt_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| branch.clone());
+                app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
+                    repo_root,
+                    branch,
+                    folder,
+                    opts: crate::sidebar::mode::WorktreeOpts::default(),
+                    existing_wt_path: Some(wt_path),
+                });
                 return;
             }
 
-            let repo_path = std::path::PathBuf::from(&repo_root);
             let folder = crate::git::branch_to_folder(&repo_path, &branch);
             app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
                 repo_root,
@@ -466,12 +477,12 @@ fn handle_worktree_folder_name(
             });
         }
         KeyCode::Enter => {
-            let opts = crate::sidebar::mode::WorktreeOpts::default();
             app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
                 repo_root,
                 branch,
                 folder,
-                opts,
+                opts: crate::sidebar::mode::WorktreeOpts::default(),
+                existing_wt_path: None,
             });
         }
         _ => {}
@@ -485,73 +496,56 @@ fn handle_worktree_options(
     branch: String,
     folder: String,
     mut opts: crate::sidebar::mode::WorktreeOpts,
+    existing_wt_path: Option<String>,
 ) {
     use crate::config::{AVAILABLE_MODELS, AVAILABLE_EFFORTS, WINDOW_COLORS};
 
+    macro_rules! back {
+        () => { Mode::WorktreeFlow(WorktreeStep::Options {
+            repo_root: repo_root.clone(), branch: branch.clone(),
+            folder: folder.clone(), opts: opts.clone(),
+            existing_wt_path: existing_wt_path.clone(),
+        }) };
+    }
+
     match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-        }
+        KeyCode::Esc => { app.mode = Mode::Normal; }
         KeyCode::Enter => {
-            app.execute_worktree(&repo_root, &branch, &folder, &opts);
+            app.execute_worktree(&repo_root, &branch, &folder, &opts, existing_wt_path.as_deref());
         }
         KeyCode::Tab => {
             opts.field = (opts.field + 1) % 5;
-            app.mode = Mode::WorktreeFlow(WorktreeStep::Options { repo_root, branch, folder, opts });
+            app.mode = back!();
         }
         KeyCode::BackTab => {
             opts.field = if opts.field == 0 { 4 } else { opts.field - 1 };
-            app.mode = Mode::WorktreeFlow(WorktreeStep::Options { repo_root, branch, folder, opts });
+            app.mode = back!();
         }
         KeyCode::Left => {
             match opts.field {
-                0 => {
-                    opts.model_idx = if opts.model_idx == 0 {
-                        AVAILABLE_MODELS.len() - 1
-                    } else {
-                        opts.model_idx - 1
-                    };
-                }
-                1 => {
-                    opts.effort_idx = if opts.effort_idx == 0 {
-                        AVAILABLE_EFFORTS.len() - 1
-                    } else {
-                        opts.effort_idx - 1
-                    };
-                }
-                3 => {
-                    opts.color_idx = if opts.color_idx == 0 {
-                        WINDOW_COLORS.len() - 1
-                    } else {
-                        opts.color_idx - 1
-                    };
-                }
+                0 => opts.model_idx = if opts.model_idx == 0 { AVAILABLE_MODELS.len() - 1 } else { opts.model_idx - 1 },
+                1 => opts.effort_idx = if opts.effort_idx == 0 { AVAILABLE_EFFORTS.len() - 1 } else { opts.effort_idx - 1 },
+                3 => opts.color_idx = if opts.color_idx == 0 { WINDOW_COLORS.len() - 1 } else { opts.color_idx - 1 },
                 _ => {}
             }
-            app.mode = Mode::WorktreeFlow(WorktreeStep::Options { repo_root, branch, folder, opts });
+            app.mode = back!();
         }
         KeyCode::Right => {
             match opts.field {
-                0 => {
-                    opts.model_idx = (opts.model_idx + 1) % AVAILABLE_MODELS.len();
-                }
-                1 => {
-                    opts.effort_idx = (opts.effort_idx + 1) % AVAILABLE_EFFORTS.len();
-                }
-                3 => {
-                    opts.color_idx = (opts.color_idx + 1) % WINDOW_COLORS.len();
-                }
+                0 => opts.model_idx = (opts.model_idx + 1) % AVAILABLE_MODELS.len(),
+                1 => opts.effort_idx = (opts.effort_idx + 1) % AVAILABLE_EFFORTS.len(),
+                3 => opts.color_idx = (opts.color_idx + 1) % WINDOW_COLORS.len(),
                 _ => {}
             }
-            app.mode = Mode::WorktreeFlow(WorktreeStep::Options { repo_root, branch, folder, opts });
+            app.mode = back!();
         }
         KeyCode::Char(' ') => {
             match opts.field {
-                2 => { opts.launch_claude = !opts.launch_claude; }
-                4 => { opts.open_vscode = !opts.open_vscode; }
+                2 => opts.launch_claude = !opts.launch_claude,
+                4 => opts.open_vscode = !opts.open_vscode,
                 _ => {}
             }
-            app.mode = Mode::WorktreeFlow(WorktreeStep::Options { repo_root, branch, folder, opts });
+            app.mode = back!();
         }
         _ => {}
     }
