@@ -13,6 +13,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::Confirm(_) => handle_confirm(app, key),
         Mode::Help => handle_help(app, key),
         Mode::Compose { .. } => handle_compose(app, key),
+        _ => {}
     }
 }
 
@@ -90,6 +91,13 @@ fn handle_confirm(app: &mut App, key: KeyEvent) {
                             app.error = Some(format!("Killed window but failed to delete {}: {}", path, e));
                         } else {
                             app.message = Some("Window killed and worktree deleted".into());
+                        }
+                    }
+                    ConfirmKind::DeleteWorktree { worktree_path, .. } => {
+                        if let Err(e) = std::fs::remove_dir_all(&worktree_path) {
+                            app.error = Some(format!("Failed to delete worktree {}: {}", worktree_path, e));
+                        } else {
+                            app.message = Some("Worktree deleted".into());
                         }
                     }
                 }

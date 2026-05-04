@@ -429,6 +429,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 area,
             );
         }
+        _ => {}
     }
 }
 
