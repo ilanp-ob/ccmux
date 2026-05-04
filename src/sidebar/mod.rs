@@ -442,6 +442,41 @@ impl App {
         true
     }
 
+    /// Navigate to an already-existing worktree instead of creating a new one.
+    /// Finds a tmux window with a pane inside `wt_path`; if none exists, opens a new window there.
+    pub fn navigate_to_existing_worktree(&mut self, wt_path: &str) {
+        let tmux = Tmux::new(self.managed_server.clone());
+
+        // Scan all panes in the session for one whose path is inside the worktree.
+        if let Ok(out) = tmux.cmd()
+            .args(["list-panes", "-s", "-t", &self.managed_session,
+                   "-F", "#{window_id}\t#{pane_current_path}"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let mut parts = line.splitn(2, '\t');
+                let window_id = parts.next().unwrap_or("").trim().to_string();
+                let pane_path  = parts.next().unwrap_or("").trim();
+                if pane_path.starts_with(wt_path) {
+                    let _ = tmux.select_window(&window_id);
+                    self.message = Some("Switched to existing worktree window".into());
+                    return;
+                }
+            }
+        }
+
+        // No open window found — create one at the worktree path without running git worktree add.
+        let path = std::path::PathBuf::from(wt_path);
+        let window_name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "worktree".to_string());
+        match tmux.new_window(&self.managed_session, &window_name, &path) {
+            Ok(_) => self.message = Some(format!("Opened existing worktree: {}", window_name)),
+            Err(e) => self.error = Some(format!("Failed to open worktree window: {}", e)),
+        }
+    }
+
     /// Begin the worktree creation flow for the selected pane's repo.
     pub fn start_worktree_flow(&mut self) {
         let Some(pane) = self.selected_pane() else { return };

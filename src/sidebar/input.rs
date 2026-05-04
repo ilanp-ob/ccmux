@@ -410,14 +410,21 @@ fn handle_worktree_branch_select(
         }
 
         KeyCode::Enter => {
-            let branch = if entering_new {
+            let (branch, existing_wt) = if entering_new {
                 if new_branch_text.is_empty() { return; }
-                new_branch_text.clone()
+                (new_branch_text.clone(), None)
             } else {
                 if filtered_len == 0 { return; }
-                let safe_cursor = cursor.min(filtered_len - 1);
-                filtered[safe_cursor].name.clone()
+                let entry = filtered[cursor.min(filtered_len - 1)];
+                (entry.name.clone(), entry.worktree_path.clone())
             };
+
+            // Branch already has a worktree — navigate to it rather than re-creating.
+            if let Some(wt_path) = existing_wt {
+                app.navigate_to_existing_worktree(&wt_path);
+                app.mode = Mode::Normal;
+                return;
+            }
 
             let repo_path = std::path::PathBuf::from(&repo_root);
             let folder = crate::git::branch_to_folder(&repo_path, &branch);
