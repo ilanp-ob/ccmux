@@ -116,6 +116,10 @@ impl Tmux {
             let Some(pane_type) = pane_type else {
                 continue;
             };
+            // Only list Claude Code sessions
+            if !matches!(pane_type, PaneType::Claude) {
+                continue;
+            }
 
             let status = self.capture_pane(&pane_id, 30, true)
                 .map(|c| detect_status(&c))

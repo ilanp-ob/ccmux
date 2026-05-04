@@ -29,9 +29,21 @@ pub struct App {
     own_pane_id: Option<String>,
     pub error: Option<String>,
     pub message: Option<String>,
-    pane_content_cache: HashMap<String, String>,
+    pub pane_content_cache: HashMap<String, String>,
     last_refresh: Instant,
     last_status_tick: Instant,
+    last_focus_tick: Instant,
+    /// Maps (terminal_row, flat_pane_idx) for mouse click hit-testing. Updated each render.
+    pub pane_click_rows: Vec<(u16, usize)>,
+    /// Scroll offset in items (not rows).
+    pub scroll_offset: usize,
+    /// Whether the sidebar pane currently has tmux focus.
+    pub is_focused: bool,
+    /// Auto-open sidebar when switching to a window with Claude sessions.
+    pub sticky: bool,
+    /// Flat index of the item last previewed with Enter (first press). Second Enter on the
+    /// same index commits focus to the Claude pane; changing selection clears this.
+    pub last_entered_idx: Option<usize>,
 }
 
 impl App {
@@ -47,19 +59,16 @@ impl App {
             Self::load_groups(&server, &managed_session, own_pane_id.as_deref(), &config)
         };
 
-        let last_active = if !managed_session.is_empty() {
-            tmux.last_active_window_id(&managed_session)
-        } else {
-            None
-        };
-
-        let selected = Self::initial_selection(&groups, last_active.as_deref());
+        // Start with the Claude pane in the same window as the sidebar selected,
+        // so opening from a Claude window immediately highlights that session.
+        let selected = Self::initial_selection(&groups, own_window_id.as_deref());
 
         let error = if managed_session.is_empty() {
             Some("Not running inside tmux. Launch ccmux from within a tmux session.".into())
         } else {
             None
         };
+        let sticky = config.sidebar.sticky;
 
         Ok(Self {
             groups,
@@ -76,6 +85,12 @@ impl App {
             pane_content_cache: HashMap::new(),
             last_refresh: Instant::now(),
             last_status_tick: Instant::now(),
+            last_focus_tick: Instant::now(),
+            pane_click_rows: Vec::new(),
+            scroll_offset: 0,
+            is_focused: true,
+            sticky,
+            last_entered_idx: None,
         })
     }
 
@@ -111,9 +126,10 @@ impl App {
         all_groups
     }
 
-    fn initial_selection(groups: &[WindowGroup], last_window_id: Option<&str>) -> usize {
+    fn initial_selection(groups: &[WindowGroup], own_window_id: Option<&str>) -> usize {
         let panes = Self::flat_panes_ref(groups);
-        if let Some(id) = last_window_id {
+        // Prefer the Claude pane that lives in the same window as the sidebar itself.
+        if let Some(id) = own_window_id {
             if let Some(idx) = panes.iter().position(|p| p.window_id == id) {
                 return idx;
             }
@@ -138,6 +154,7 @@ impl App {
         let count = self.flat_panes().len();
         if count > 0 {
             self.selected = (self.selected + 1) % count;
+            self.last_entered_idx = None;
         }
     }
 
@@ -145,12 +162,14 @@ impl App {
         let count = self.flat_panes().len();
         if count > 0 {
             self.selected = if self.selected == 0 { count - 1 } else { self.selected - 1 };
+            self.last_entered_idx = None;
         }
     }
 
     pub fn select_by_display_num(&mut self, n: usize) {
         if let Some(idx) = self.flat_panes().iter().position(|p| p.display_num == n) {
             self.selected = idx;
+            self.last_entered_idx = None;
         }
     }
 
@@ -237,19 +256,120 @@ impl App {
         changed
     }
 
-    /// Switch tmux focus to the selected pane.
+    /// Switch tmux focus to the selected Claude pane, auto-opening a sidebar there if needed.
     pub fn focus_selected(&mut self) {
         let Some(pane) = self.selected_pane() else { return };
         let pane_id = pane.pane_id.clone();
         let window_id = pane.window_id.clone();
         let tmux = Tmux::new(self.managed_server.clone());
 
-        // Switch window first if pane is in a different window
         let own_window = self.own_window_id.as_deref().unwrap_or("");
         if window_id != own_window {
             let _ = tmux.select_window(&window_id);
+            // Auto-open a sidebar in the target window so the user sees it immediately.
+            self.ensure_sidebar_in_window(&window_id, &pane_id);
+        }
+        // Always land on the Claude pane (split-window steals focus, so this re-focuses it).
+        let _ = tmux.select_pane(&pane_id);
+    }
+
+    /// Spawn a sidebar in `window_id` if one isn't already there.
+    /// Re-selects `claude_pane_id` afterwards since split-window steals focus.
+    fn ensure_sidebar_in_window(&self, window_id: &str, claude_pane_id: &str) {
+        let tmux = Tmux::new(self.managed_server.clone());
+        let var_key = format!("@ccmux_sidebar_{}_{}", self.managed_session, window_id);
+
+        // Already open?
+        if let Some(pane_id) = tmux.get_var(&var_key) {
+            let alive = tmux.cmd()
+                .args(["list-panes", "-s", "-t", &self.managed_session, "-F", "#{pane_id}"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == pane_id))
+                .unwrap_or(false);
+            if alive { return; }
+            let _ = tmux.del_var(&var_key);
+        }
+
+        let binary = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "ccmux".to_string());
+        let sidebar_cmd = match &self.managed_server {
+            Some(s) => format!("{} sidebar --server {}", binary, s),
+            None => format!("{} sidebar", binary),
+        };
+        let width = self.config.sidebar.width.to_string();
+
+        let output = tmux.cmd()
+            .args([
+                "split-window", "-hb",
+                "-l", &width,
+                "-t", window_id,
+                "-P", "-F", "#{pane_id}",
+                &sidebar_cmd,
+            ])
+            .output();
+
+        if let Ok(out) = output {
+            let new_pane = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !new_pane.is_empty() {
+                let _ = tmux.set_var(&var_key, &new_pane);
+                // Return focus to the Claude pane — split-window moved it to the new sidebar.
+                let _ = tmux.select_pane(claude_pane_id);
+            }
+        }
+    }
+
+    /// First-Enter: switch to the selected pane's window so the user can preview it,
+    /// but keep focus on the sidebar. Does nothing if already in the same window.
+    pub fn preview_selected(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let window_id = pane.window_id.clone();
+        let tmux = Tmux::new(self.managed_server.clone());
+        let own_window = self.own_window_id.as_deref().unwrap_or("");
+        if window_id != own_window {
+            let _ = tmux.select_window(&window_id);
+        }
+        // Don't select_pane — sidebar stays focused.
+    }
+
+    /// Toggle sticky mode and persist in tmux global var.
+    pub fn toggle_sticky(&mut self) {
+        self.sticky = !self.sticky;
+        let tmux = Tmux::new(self.managed_server.clone());
+        let val = if self.sticky { "1" } else { "0" };
+        let _ = tmux.set_var("@ccmux_sticky", val);
+        self.message = Some(if self.sticky { "Sticky on" } else { "Sticky off" }.into());
+    }
+
+    /// Send `text` followed by Enter to the selected Claude pane.
+    pub fn send_message(&mut self, text: &str) {
+        let Some(pane) = self.selected_pane() else { return };
+        let pane_id = pane.pane_id.clone();
+        let tmux = Tmux::new(self.managed_server.clone());
+        match tmux.send_keys(&pane_id, text) {
+            Ok(_) => self.message = Some("Sent".into()),
+            Err(e) => self.error = Some(format!("Send failed: {}", e)),
+        }
+    }
+
+    /// Poll whether the sidebar pane is still the active tmux pane. Returns true if changed.
+    pub fn tick_focus(&mut self) -> bool {
+        if self.last_focus_tick.elapsed() < Duration::from_millis(300) {
+            return false;
+        }
+        self.last_focus_tick = Instant::now();
+        let Some(own) = self.own_pane_id.clone() else { return false };
+        let tmux = Tmux::new(self.managed_server.clone());
+        let active = tmux.cmd()
+            .args(["display-message", "-t", &own, "-p", "#{pane_active}"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+            .unwrap_or(true);
+        if active != self.is_focused {
+            self.is_focused = active;
+            true
         } else {
-            let _ = tmux.select_pane(&pane_id);
+            false
         }
     }
 }

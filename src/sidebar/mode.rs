@@ -9,6 +9,8 @@ pub enum Mode {
     Confirm(ConfirmKind),
     /// Help overlay
     Help,
+    /// Composing a message to send to the selected Claude session
+    Compose { text: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

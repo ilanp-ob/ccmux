@@ -8,12 +8,11 @@ use std::io::{self, stdout};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use crossterm::{
-    event::{self, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
 use ratatui::prelude::*;
-use session::ClaudeCodeStatus;
 
 #[derive(Parser)]
 #[command(name = "ccmux", version, about = "tmux sidebar for Claude Code sessions")]
@@ -52,6 +51,18 @@ enum Cmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Auto-open sidebar when a window with Claude sessions is focused (called from tmux hook)
+    AutoOpen {
+        #[arg(long)]
+        window: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Close all ccmux sidebars in this tmux server
+    Close {
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -62,6 +73,8 @@ fn main() -> Result<()> {
         Cmd::Sidebar { server } => run_sidebar(server),
         Cmd::Focus { n, server } => run_focus(n, server),
         Cmd::NotifyWorker { server } => run_notify_worker(server),
+        Cmd::AutoOpen { window, server } => run_auto_open(window, server),
+        Cmd::Close { server } => run_close(server),
     }
 }
 
@@ -131,28 +144,51 @@ fn run_toggle(server: Option<String>) -> Result<()> {
         anyhow::bail!("Not inside a tmux session");
     }
 
-    let window_id = tmux.own_window_id().unwrap_or_default();
-    let var_key = format!("@ccmux_sidebar_{}_{}", session, window_id);
+    // Get the current window from the tmux client — reliable from run-shell, no TMUX_PANE needed.
+    let current_window = tmux.cmd()
+        .args(["display-message", "-p", "#{window_id}"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
 
-    // Check if a sidebar pane already exists
+    if current_window.is_empty() {
+        anyhow::bail!("Could not determine current tmux window");
+    }
+
+    // Per-window sidebar: each window manages its own sidebar independently.
+    // This lets the user open a sidebar wherever they are without it pulling them elsewhere.
+    let var_key = format!("@ccmux_sidebar_{}_{}", session, current_window);
+
     if let Some(pane_id) = tmux.get_var(&var_key) {
-        // Verify it's still alive (pane might have died)
+        // Session-wide search — avoids false negatives from window-scoped list-panes.
         let alive = tmux.cmd()
-            .args(["list-panes", "-F", "#{pane_id}"])
+            .args(["list-panes", "-s", "-t", &session, "-F", "#{pane_id}"])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pane_id))
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == pane_id))
             .unwrap_or(false);
 
         if alive {
-            tmux.kill_pane(&pane_id)?;
-            tmux.del_var(&var_key)?;
+            // Since var_key is scoped to current_window, the sidebar IS in this window.
+            // pane_active=1 means it's the focused pane here → close. Otherwise → focus it.
+            let pane_active = tmux.cmd()
+                .args(["display-message", "-t", &pane_id, "-p", "#{pane_active}"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+                .unwrap_or(false);
+
+            if pane_active {
+                tmux.kill_pane(&pane_id)?;
+                tmux.del_var(&var_key)?;
+            } else {
+                let _ = tmux.select_pane(&pane_id);
+            }
             return Ok(());
         } else {
             tmux.del_var(&var_key)?;
         }
     }
 
-    // Spawn sidebar
+    // No sidebar in this window — open one here.
     let config = config::Config::load().unwrap_or_default();
 
     let binary = std::env::current_exe()
@@ -166,7 +202,6 @@ fn run_toggle(server: Option<String>) -> Result<()> {
 
     let pane_id = tmux.split_sidebar(&session, config.sidebar.width, &sidebar_cmd)?;
     tmux.set_var(&var_key, &pane_id)?;
-    // Explicitly focus the sidebar pane — run-shell doesn't transfer focus automatically
     let _ = tmux.select_pane(&pane_id);
 
     // Spawn notify-worker if not already running
@@ -202,12 +237,14 @@ fn run_sidebar(server: Option<String>) -> Result<()> {
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_sidebar_loop(&mut terminal, &mut app);
 
     disable_raw_mode()?;
+    stdout().execute(DisableMouseCapture)?;
     stdout().execute(LeaveAlternateScreen)?;
 
     result
@@ -230,9 +267,16 @@ fn run_sidebar_loop(
         }
 
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                sidebar::input::handle_key(app, key);
-                needs_redraw = true;
+            match event::read()? {
+                Event::Key(key) => {
+                    sidebar::input::handle_key(app, key);
+                    needs_redraw = true;
+                }
+                Event::Mouse(mouse) => {
+                    sidebar::input::handle_mouse(app, mouse);
+                    needs_redraw = true;
+                }
+                _ => {}
             }
         }
 
@@ -241,6 +285,10 @@ fn run_sidebar_loop(
         }
 
         if app.tick_status() {
+            needs_redraw = true;
+        }
+
+        if app.tick_focus() {
             needs_redraw = true;
         }
     }
@@ -275,4 +323,107 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
 
 fn run_notify_worker(_server: Option<String>) -> Result<()> {
     todo!("implemented in Plan 4")
+}
+
+fn run_close(server: Option<String>) -> Result<()> {
+    let tmux = tmux::Tmux::new(server);
+
+    // Scan all global tmux options for @ccmux_sidebar_* vars (one per window that has a sidebar).
+    let output = tmux.cmd()
+        .args(["show-options", "-g"])
+        .output()?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let entries: Vec<(String, String)> = text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, ' ');
+            let key = parts.next()?.trim().to_string();
+            let val = parts.next()?.trim().trim_matches('"').to_string();
+            if key.starts_with("@ccmux_sidebar_") && !val.is_empty() {
+                Some((key, val))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (key, pane_id) in entries {
+        let _ = tmux.kill_pane(&pane_id);
+        let _ = tmux.del_var(&key);
+    }
+
+    Ok(())
+}
+
+fn run_auto_open(window: Option<String>, server: Option<String>) -> Result<()> {
+    let tmux = tmux::Tmux::new(server.clone());
+
+    // Only proceed if sticky mode is enabled
+    if tmux.get_var("@ccmux_sticky").as_deref() != Some("1") {
+        return Ok(());
+    }
+
+    let window_id = match window {
+        Some(id) => id,
+        None => return Ok(()),
+    };
+
+    // Derive session from window
+    let output = tmux.cmd()
+        .args(["display-message", "-t", &window_id, "-p", "#{session_name}"])
+        .output()?;
+    let session = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if session.is_empty() {
+        return Ok(());
+    }
+
+    // Skip if a sidebar is already open in this specific window
+    let var_key = format!("@ccmux_sidebar_{}_{}", session, window_id);
+    if let Some(pane_id) = tmux.get_var(&var_key) {
+        let alive = tmux.cmd()
+            .args(["list-panes", "-s", "-t", &session, "-F", "#{pane_id}"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == pane_id))
+            .unwrap_or(false);
+        if alive {
+            return Ok(());
+        }
+        tmux.del_var(&var_key)?;
+    }
+
+    // Check if this window has Claude panes
+    let config = config::Config::load().unwrap_or_default();
+    let groups = tmux.list_groups(&session, None, &config.detection.commands)?;
+    let has_claude = groups.iter()
+        .flat_map(|g| g.panes.iter())
+        .any(|p| p.window_id == window_id);
+    if !has_claude {
+        return Ok(());
+    }
+
+    // Open the sidebar in this window without stealing focus
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+    let sidebar_cmd = match &server {
+        Some(s) => format!("{} sidebar --server {}", binary, s),
+        None => format!("{} sidebar", binary),
+    };
+
+    let width_str = config.sidebar.width.to_string();
+    let output = tmux.cmd()
+        .args([
+            "split-window", "-hb",
+            "-l", &width_str,
+            "-t", &window_id,
+            "-P", "-F", "#{pane_id}",
+            &sidebar_cmd,
+        ])
+        .output()?;
+    let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !pane_id.is_empty() {
+        tmux.set_var(&var_key, &pane_id)?;
+    }
+
+    Ok(())
 }
