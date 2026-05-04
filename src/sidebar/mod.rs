@@ -47,6 +47,7 @@ pub struct App {
     /// Background branch-fetch thread for the worktree flow.
     pub fetch_handle: Option<std::thread::JoinHandle<anyhow::Result<Vec<crate::git::BranchEntry>>>>,
     pub fetch_repo_root: Option<String>,
+    last_nav_hint_tick: Instant,
 }
 
 impl App {
@@ -96,6 +97,7 @@ impl App {
             last_entered_idx: None,
             fetch_handle: None,
             fetch_repo_root: None,
+            last_nav_hint_tick: Instant::now(),
         })
     }
 
@@ -386,6 +388,11 @@ impl App {
     /// Check for a nav-hint set by another sidebar telling us which pane to select.
     /// Returns true if selection changed.
     pub fn tick_nav_hint(&mut self) -> bool {
+        if self.last_nav_hint_tick.elapsed() < Duration::from_millis(300) {
+            return false;
+        }
+        self.last_nav_hint_tick = Instant::now();
+
         let own_window = match &self.own_window_id {
             Some(w) => w.clone(),
             None => return false,

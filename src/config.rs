@@ -27,7 +27,7 @@ pub struct SidebarConfig {
     pub sticky: bool,
 }
 impl Default for SidebarConfig {
-    fn default() -> Self { Self { width: 50, position: "left".into(), refresh_ms: 500, sticky: false } }
+    fn default() -> Self { Self { width: 50, position: "left".into(), refresh_ms: 2000, sticky: false } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

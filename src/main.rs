@@ -394,31 +394,29 @@ fn run_auto_open(window: Option<String>, server: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    // Skip if a sidebar is already open in this specific window
+    // Skip if a sidebar is already alive in this window.
     let var_key = format!("@ccmux_sidebar_{}_{}", session, window_id);
     if let Some(pane_id) = tmux.get_var(&var_key) {
-        let alive = tmux.cmd()
-            .args(["list-panes", "-s", "-t", &session, "-F", "#{pane_id}"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == pane_id))
-            .unwrap_or(false);
-        if alive {
+        if tmux.pane_exists(&pane_id) {
             return Ok(());
         }
         tmux.del_var(&var_key)?;
     }
 
-    // Check if this window has Claude panes
-    let config = config::Config::load().unwrap_or_default();
-    let groups = tmux.list_groups(&session, None, &config.detection.commands)?;
-    let has_claude = groups.iter()
-        .flat_map(|g| g.panes.iter())
-        .any(|p| p.window_id == window_id);
+    // Quick Claude check using pane_current_command — no ps scan needed.
+    // The notify-worker handles the versioned-binary edge case via process tree walk.
+    let panes_out = tmux.cmd()
+        .args(["list-panes", "-t", &window_id, "-F", "#{pane_current_command}"])
+        .output()?;
+    let has_claude = String::from_utf8_lossy(&panes_out.stdout)
+        .lines()
+        .any(|cmd| cmd.contains("claude") || cmd.contains("ocli"));
     if !has_claude {
         return Ok(());
     }
 
-    // Open the sidebar in this window without stealing focus
+    // Open the sidebar in this window without stealing focus.
+    let config = config::Config::load().unwrap_or_default();
     let binary = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "ccmux".to_string());
