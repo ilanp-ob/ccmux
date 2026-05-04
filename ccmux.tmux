@@ -15,8 +15,9 @@ tmux bind-key "$toggle_key" run-shell "ccmux toggle"
 # Bind close-all key (prefix + M-c by default; override with @ccmux-close-key)
 tmux bind-key "$close_key" run-shell "ccmux close"
 
-# Install window-focus-in hook for sticky sidebar auto-open
-tmux set-hook -g window-focus-in "run-shell 'ccmux auto-open --window \#{window_id}'"
+# after-select-window and after-new-window (set in ~/.tmux.conf or via ccmux setup)
+# cover the auto-open use case. window-focus-in fires on every iTerm2 click/focus
+# event and would block tmux even with run-shell, so we intentionally omit it here.
 
 # Check binary is available
 if ! command -v ccmux &>/dev/null; then
