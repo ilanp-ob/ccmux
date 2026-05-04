@@ -44,6 +44,9 @@ pub struct App {
     /// Flat index of the item last previewed with Enter (first press). Second Enter on the
     /// same index commits focus to the Claude pane; changing selection clears this.
     pub last_entered_idx: Option<usize>,
+    /// Background branch-fetch thread for the worktree flow.
+    pub fetch_handle: Option<std::thread::JoinHandle<anyhow::Result<Vec<crate::git::BranchEntry>>>>,
+    pub fetch_repo_root: Option<String>,
 }
 
 impl App {
@@ -91,6 +94,8 @@ impl App {
             is_focused: true,
             sticky,
             last_entered_idx: None,
+            fetch_handle: None,
+            fetch_repo_root: None,
         })
     }
 
@@ -371,5 +376,258 @@ impl App {
         } else {
             false
         }
+    }
+
+    /// Check whether the background branch-fetch thread finished. Returns true if mode changed.
+    pub fn tick_worktree(&mut self) -> bool {
+        let done = self.fetch_handle.as_ref().map(|h| h.is_finished()).unwrap_or(false);
+        if !done { return false; }
+
+        let result = self.fetch_handle.take().unwrap()
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")));
+        let repo_root = self.fetch_repo_root.take().unwrap_or_default();
+
+        match result {
+            Ok(branches) => {
+                self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
+                    crate::sidebar::mode::WorktreeStep::BranchSelect {
+                        repo_root,
+                        branches,
+                        filter: String::new(),
+                        cursor: 0,
+                        entering_new: false,
+                        new_branch_text: String::new(),
+                    },
+                );
+            }
+            Err(e) => {
+                self.error = Some(format!("Fetch failed: {}", e));
+                self.mode = crate::sidebar::mode::Mode::Normal;
+            }
+        }
+        true
+    }
+
+    /// Begin the worktree creation flow for the selected pane's repo.
+    pub fn start_worktree_flow(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let path = pane.current_path.clone();
+
+        let Some(repo_root) = crate::git::find_main_repo_root(&path) else {
+            self.error = Some("Not inside a git repository".into());
+            return;
+        };
+
+        let root_str = repo_root.to_string_lossy().to_string();
+        self.fetch_repo_root = Some(root_str);
+        self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
+            crate::sidebar::mode::WorktreeStep::Fetching,
+        );
+
+        self.fetch_handle = Some(std::thread::spawn(move || {
+            crate::git::fetch_origin(&repo_root).ok(); // fetch errors are non-fatal
+            crate::git::list_branches(&repo_root)
+        }));
+    }
+
+    /// Execute worktree creation after user confirms options.
+    pub fn execute_worktree(
+        &mut self,
+        repo_root: &str,
+        branch: &str,
+        folder: &str,
+        opts: &crate::sidebar::mode::WorktreeOpts,
+    ) {
+        use crate::config::{AVAILABLE_MODELS, AVAILABLE_EFFORTS, WINDOW_COLORS};
+
+        self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
+            crate::sidebar::mode::WorktreeStep::Executing {
+                status: "Creating worktree…".into(),
+            },
+        );
+
+        let repo_path = std::path::PathBuf::from(repo_root);
+        let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
+        let worktree_path = parent.join(folder);
+
+        if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch) {
+            self.error = Some(format!("Worktree error: {}", e));
+            self.mode = crate::sidebar::mode::Mode::Normal;
+            return;
+        }
+
+        let tmux = Tmux::new(self.managed_server.clone());
+        let window_name = worktree_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| folder.to_string());
+
+        let window_id = match tmux.new_window(&self.managed_session, &window_name, &worktree_path) {
+            Ok(id) => id,
+            Err(e) => {
+                self.error = Some(format!("Window error: {}", e));
+                self.mode = crate::sidebar::mode::Mode::Normal;
+                return;
+            }
+        };
+
+        let (_, hex, tmux_colour) = WINDOW_COLORS[opts.color_idx];
+        if !tmux_colour.is_empty() {
+            let _ = tmux.set_window_color(&window_id, tmux_colour);
+        }
+
+        if opts.open_vscode && !hex.is_empty() {
+            Self::write_vscode_color(&worktree_path, hex);
+        }
+
+        if opts.launch_claude {
+            let model = AVAILABLE_MODELS[opts.model_idx];
+            let effort = AVAILABLE_EFFORTS[opts.effort_idx];
+            let cmd = format!("claude --model {} --effort {}", model, effort);
+            let _ = tmux.send_keys(&window_id, &cmd);
+        }
+
+        if opts.open_vscode {
+            let _ = tmux.send_keys(&window_id, "code .");
+        }
+
+        self.message = Some(format!("✓ Worktree created: {}", folder));
+        self.mode = crate::sidebar::mode::Mode::Normal;
+        let _ = self.refresh();
+    }
+
+    fn write_vscode_color(path: &std::path::Path, hex: &str) {
+        let vscode_dir = path.join(".vscode");
+        let _ = std::fs::create_dir_all(&vscode_dir);
+        let settings_path = vscode_dir.join("settings.json");
+
+        let mut val: serde_json::Value = settings_path
+            .exists()
+            .then(|| std::fs::read_to_string(&settings_path).ok())
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        val["workbench.colorCustomizations"]["titleBar.activeBackground"] =
+            serde_json::Value::String(hex.to_string());
+        val["workbench.colorCustomizations"]["titleBar.inactiveBackground"] =
+            serde_json::Value::String(hex.to_string());
+
+        if let Ok(text) = serde_json::to_string_pretty(&val) {
+            let _ = std::fs::write(&settings_path, text);
+        }
+    }
+
+    pub fn execute_new_window(&mut self, name: &str, color_idx: usize, launch_claude: bool) {
+        use crate::config::WINDOW_COLORS;
+
+        let tmux = Tmux::new(self.managed_server.clone());
+        let path = self.selected_pane()
+            .map(|p| p.current_path.clone())
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            });
+
+        let window_name = if name.trim().is_empty() { "new" } else { name.trim() };
+
+        let window_id = match tmux.new_window(&self.managed_session, window_name, &path) {
+            Ok(id) => id,
+            Err(e) => {
+                self.error = Some(format!("Window error: {}", e));
+                self.mode = crate::sidebar::mode::Mode::Normal;
+                return;
+            }
+        };
+
+        let (_, _, tmux_colour) = WINDOW_COLORS[color_idx];
+        if !tmux_colour.is_empty() {
+            let _ = tmux.set_window_color(&window_id, tmux_colour);
+        }
+
+        if launch_claude {
+            let _ = tmux.send_keys(&window_id, "claude");
+        }
+
+        self.message = Some(format!("✓ Window created: {}", window_name));
+        self.mode = crate::sidebar::mode::Mode::Normal;
+        let _ = self.refresh();
+    }
+
+    pub fn execute_rename(&mut self, new_name: &str) {
+        if new_name.trim().is_empty() {
+            self.mode = crate::sidebar::mode::Mode::Normal;
+            return;
+        }
+        let Some(pane) = self.selected_pane() else { return };
+        let window_id = pane.window_id.clone();
+        let tmux = Tmux::new(self.managed_server.clone());
+        match tmux.rename_window(&window_id, new_name.trim()) {
+            Ok(_) => self.message = Some(format!("✓ Renamed: {}", new_name.trim())),
+            Err(e) => self.error = Some(format!("Rename failed: {}", e)),
+        }
+        self.mode = crate::sidebar::mode::Mode::Normal;
+        let _ = self.refresh();
+    }
+
+    /// Dispatch an ActionItem for the selected pane.
+    pub fn send_action(&mut self, item: crate::sidebar::mode::ActionItem) {
+        use crate::sidebar::mode::ActionItem;
+        match item {
+            ActionItem::CreatePR | ActionItem::ViewPR | ActionItem::MergePR | ActionItem::ClosePR => {
+                let cmd = match &item {
+                    ActionItem::CreatePR => "gh pr create --fill",
+                    ActionItem::ViewPR   => "gh pr view",
+                    ActionItem::MergePR  => "gh pr merge --auto",
+                    ActionItem::ClosePR  => "gh pr close",
+                    _ => unreachable!(),
+                };
+                let Some(pane) = self.selected_pane() else { return };
+                let pane_id = pane.pane_id.clone();
+                let window_id = pane.window_id.clone();
+                let tmux = Tmux::new(self.managed_server.clone());
+                let _ = tmux.select_window(&window_id);
+                let _ = tmux.select_pane(&pane_id);
+                let _ = tmux.send_keys(&pane_id, cmd);
+                self.message = Some(format!("Sent: {}", cmd));
+                self.mode = crate::sidebar::mode::Mode::Normal;
+            }
+            ActionItem::DeleteWorktree { repo_root, worktree_path } => {
+                self.mode = crate::sidebar::mode::Mode::Confirm(
+                    crate::sidebar::mode::ConfirmKind::DeleteWorktree {
+                        repo_root,
+                        worktree_path,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Build the action items list for the currently selected pane.
+    pub fn action_items_for_selected(&self) -> Vec<crate::sidebar::mode::ActionItem> {
+        use crate::sidebar::mode::ActionItem;
+        let Some(pane) = self.selected_pane() else { return vec![] };
+
+        let mut items = vec![
+            ActionItem::CreatePR,
+            ActionItem::ViewPR,
+            ActionItem::MergePR,
+            ActionItem::ClosePR,
+        ];
+
+        // Add "Delete worktree" if this pane lives inside a worktree (not the main repo)
+        if let Some(repo_root) = crate::git::find_main_repo_root(&pane.current_path) {
+            if let Some(wt_root) = crate::git::find_repo_root(&pane.current_path) {
+                let wt_str = wt_root.to_string_lossy().to_string();
+                let main_str = repo_root.to_string_lossy().to_string();
+                if wt_str != main_str {
+                    items.push(ActionItem::DeleteWorktree {
+                        worktree_path: wt_str,
+                        repo_root: main_str,
+                    });
+                }
+            }
+        }
+
+        items
     }
 }

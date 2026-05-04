@@ -293,6 +293,10 @@ fn run_sidebar_loop(
         if app.tick_focus() {
             needs_redraw = true;
         }
+
+        if app.tick_worktree() {
+            needs_redraw = true;
+        }
     }
 
     Ok(())
