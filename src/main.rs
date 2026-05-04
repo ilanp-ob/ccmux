@@ -297,6 +297,10 @@ fn run_sidebar_loop(
         if app.tick_worktree() {
             needs_redraw = true;
         }
+
+        if app.tick_nav_hint() {
+            needs_redraw = true;
+        }
     }
 
     Ok(())

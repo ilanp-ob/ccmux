@@ -133,8 +133,12 @@ impl App {
 
     fn initial_selection(groups: &[WindowGroup], own_window_id: Option<&str>) -> usize {
         let panes = Self::flat_panes_ref(groups);
-        // Prefer the Claude pane that lives in the same window as the sidebar itself.
         if let Some(id) = own_window_id {
+            // Prefer the currently active pane in own window — most likely the one the user
+            // just navigated to. Fall back to any pane in the window.
+            if let Some(idx) = panes.iter().position(|p| p.window_id == id && p.pane_active) {
+                return idx;
+            }
             if let Some(idx) = panes.iter().position(|p| p.window_id == id) {
                 return idx;
             }
@@ -283,15 +287,14 @@ impl App {
     fn ensure_sidebar_in_window(&self, window_id: &str, claude_pane_id: &str) {
         let tmux = Tmux::new(self.managed_server.clone());
         let var_key = format!("@ccmux_sidebar_{}_{}", self.managed_session, window_id);
+        let hint_key = format!("@ccmux_nav_{}_{}", self.managed_session, window_id);
 
-        // Already open?
+        // Already open? Signal it to select the correct pane and return.
         if let Some(pane_id) = tmux.get_var(&var_key) {
-            let alive = tmux.cmd()
-                .args(["list-panes", "-s", "-t", &self.managed_session, "-F", "#{pane_id}"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == pane_id))
-                .unwrap_or(false);
-            if alive { return; }
+            if tmux.pane_exists(&pane_id) {
+                let _ = tmux.set_var(&hint_key, claude_pane_id);
+                return;
+            }
             let _ = tmux.del_var(&var_key);
         }
 
@@ -318,6 +321,8 @@ impl App {
             let new_pane = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !new_pane.is_empty() {
                 let _ = tmux.set_var(&var_key, &new_pane);
+                // Tell the new sidebar which Claude pane to pre-select.
+                let _ = tmux.set_var(&hint_key, claude_pane_id);
                 // Return focus to the Claude pane — split-window moved it to the new sidebar.
                 let _ = tmux.select_pane(claude_pane_id);
             }
@@ -376,6 +381,27 @@ impl App {
         } else {
             false
         }
+    }
+
+    /// Check for a nav-hint set by another sidebar telling us which pane to select.
+    /// Returns true if selection changed.
+    pub fn tick_nav_hint(&mut self) -> bool {
+        let own_window = match &self.own_window_id {
+            Some(w) => w.clone(),
+            None => return false,
+        };
+        let hint_key = format!("@ccmux_nav_{}_{}", self.managed_session, own_window);
+        let tmux = Tmux::new(self.managed_server.clone());
+        let Some(target_pane_id) = tmux.get_var(&hint_key) else { return false };
+        // Consume the hint immediately so it's not processed twice.
+        let _ = tmux.del_var(&hint_key);
+        if let Some(idx) = self.flat_panes().iter().position(|p| p.pane_id == target_pane_id) {
+            if self.selected != idx {
+                self.selected = idx;
+                return true;
+            }
+        }
+        false
     }
 
     /// Check whether the background branch-fetch thread finished. Returns true if mode changed.

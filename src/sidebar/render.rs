@@ -256,6 +256,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let pad = area_w.saturating_sub(left_len + num_str.len());
 
             // ── Line 1: [W][S] icon name ··· %N ──────────────────────────────
+            // Trailing fill ensures row_bg covers the full width (ratatui clips at area.width).
             lines.push(Line::from(vec![
                 win_span, sel_span,
                 Span::styled(format!(" {} ", icon), sp(sc)),
@@ -265,6 +266,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 ),
                 Span::styled(" ".repeat(pad), base),
                 Span::styled(num_str, sp(Color::Rgb(70, 70, 70))),
+                Span::styled(" ".repeat(area_w), base),
             ]).style(base));
 
             // Helper: pipe span on continuation lines (same position as sel_span on line 1).
@@ -278,6 +280,10 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 None
             };
 
+            // Trailing fill — pads the line to the full area width so the row_bg
+            // covers every cell. Ratatui clips at area.width so over-filling is safe.
+            let fill = || Span::styled(" ".repeat(area_w), base);
+
             // ── Line 2: branch ────────────────────────────────────────────────
             if let Some(ref pipe) = cont_pipe {
                 lines.push(Line::from(vec![
@@ -287,10 +293,12 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         format!(" {}", branch_short),
                         sp(if is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) }),
                     ),
+                    fill(),
                 ]).style(base));
             } else {
                 lines.push(Line::from(vec![
                     Span::styled(format!("   {}", branch_short), sp(Color::Rgb(80, 90, 110))),
+                    fill(),
                 ]).style(base));
             }
 
@@ -307,16 +315,19 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     Span::styled("▌", sp(sc)),
                     Span::styled(format!(" {}  ", path_short), sp(Color::DarkGray)),
                     Span::styled(status_label, sp(sc)),
+                    fill(),
                 ]).style(base));
             } else if pane.status == ClaudeCodeStatus::WaitingInput {
                 lines.push(Line::from(vec![
                     Span::styled(" ", base),
                     Span::styled("▌", sp(Color::Yellow)),
                     Span::styled(format!(" {}", path_short), sp(Color::Rgb(55, 58, 68))),
+                    fill(),
                 ]).style(base));
             } else {
                 lines.push(Line::from(vec![
                     Span::styled(format!("   {}", path_short), sp(Color::Rgb(55, 58, 68))),
+                    fill(),
                 ]).style(base));
             }
 
@@ -327,6 +338,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         Span::styled(" ", base),
                         Span::styled("▌", sp(sc)),
                         Span::styled(" —", sp(Color::Rgb(70, 72, 85))),
+                        fill(),
                     ]).style(base));
                 } else {
                     for pl in &preview_lines {
@@ -334,6 +346,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                             Span::styled(" ", base),
                             Span::styled("▌", sp(sc)),
                             Span::styled(format!(" {}", pl), sp(Color::Rgb(140, 145, 165))),
+                            fill(),
                         ]).style(base));
                     }
                 }
