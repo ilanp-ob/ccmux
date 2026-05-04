@@ -108,8 +108,8 @@ impl Tmux {
     pub fn pane_exists(&self, pane_id: &str) -> bool {
         self.cmd()
             .args(["list-panes", "-t", pane_id])
-            .status()
-            .map(|s| s.success())
+            .output()                       // captures stdout so tmux doesn't echo it to the window
+            .map(|o| o.status.success())
             .unwrap_or(false)
     }
 }

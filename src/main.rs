@@ -226,14 +226,19 @@ fn run_toggle(server: Option<String>) -> Result<()> {
         .unwrap_or(false);
 
     if !worker_running {
-        let notify_cmd = match &server {
-            Some(s) => format!("{} notify-worker --server {}", binary, s),
-            None => format!("{} notify-worker", binary),
-        };
-        let child = std::process::Command::new("sh")
-            .args(["-c", &format!("{} &", notify_cmd)])
-            .spawn()?;
-        tmux.set_var(notify_pid_key, &child.id().to_string())?;
+        // Spawn with Stdio::null() so the notify-worker does NOT inherit the pipe
+        // that tmux opened for this run-shell subprocess's stdout. Without this,
+        // tmux waits for EOF on that pipe forever (notify-worker never closes it),
+        // permanently freezing the tmux client in the triggering iTerm2 window.
+        let mut cmd = std::process::Command::new(&binary);
+        cmd.arg("notify-worker");
+        if let Some(s) = &server { cmd.args(["--server", s]); }
+        cmd.stdin(std::process::Stdio::null())
+           .stdout(std::process::Stdio::null())
+           .stderr(std::process::Stdio::null());
+        if let Ok(child) = cmd.spawn() {
+            let _ = tmux.set_var(notify_pid_key, &child.id().to_string());
+        }
     }
 
     Ok(())
