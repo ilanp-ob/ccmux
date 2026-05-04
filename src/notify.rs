@@ -6,18 +6,25 @@ use crate::session::ClaudeCodeStatus;
 use crate::tmux::Tmux;
 
 pub fn run(server: Option<String>) {
-    let tmux = Tmux::new(server);
+    let tmux = Tmux::new(server.clone());
     let mut pane_status: HashMap<String, ClaudeCodeStatus> = HashMap::new();
 
+    // Cache binary path so we can spawn auto-open for new Claude panes.
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+
     loop {
-        // Exit cleanly when the tmux session is gone
+        // Exit cleanly when the tmux session is gone.
         if tmux.current_session().map(|s| s.is_none()).unwrap_or(true) {
             break;
         }
 
+        let sticky = tmux.get_var("@ccmux_sticky").as_deref() == Some("1");
+
         let Ok(out) = tmux.cmd()
             .args(["list-panes", "-aF",
-                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{pane_active}"])
+                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{pane_active}\t#{session_name}"])
             .output()
         else {
             std::thread::sleep(Duration::from_secs(2));
@@ -25,13 +32,25 @@ pub fn run(server: Option<String>) {
         };
 
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let parts: Vec<&str> = line.splitn(4, '\t').collect();
-            if parts.len() < 4 { continue; }
+            let parts: Vec<&str> = line.splitn(5, '\t').collect();
+            if parts.len() < 5 { continue; }
 
-            let (pane_id, command, window_id, pane_active) =
-                (parts[0], parts[1], parts[2], parts[3] == "1");
+            let (pane_id, command, window_id, pane_active, _session) =
+                (parts[0], parts[1], parts[2], parts[3] == "1", parts[4]);
 
             if !command.contains("claude") && !command.contains("ocli") { continue; }
+
+            // When sticky is on and this Claude pane is brand new, open a sidebar in its window.
+            let is_new = !pane_status.contains_key(pane_id);
+            if is_new && sticky {
+                let auto_open_cmd = match &server {
+                    Some(s) => format!("{} auto-open --window {} --server {}", binary, window_id, s),
+                    None    => format!("{} auto-open --window {}", binary, window_id),
+                };
+                let _ = std::process::Command::new("sh")
+                    .args(["-c", &auto_open_cmd])
+                    .spawn();
+            }
 
             let content = match tmux.capture_pane(pane_id, 30, true) {
                 Ok(c) => c,

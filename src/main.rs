@@ -65,6 +65,11 @@ enum Cmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Install tmux hooks and enable sticky mode so sidebars open automatically
+    Setup {
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -77,6 +82,7 @@ fn main() -> Result<()> {
         Cmd::NotifyWorker { server } => run_notify_worker(server),
         Cmd::AutoOpen { window, server } => run_auto_open(window, server),
         Cmd::Close { server } => run_close(server),
+        Cmd::Setup { server } => run_setup(server),
     }
 }
 
@@ -435,6 +441,55 @@ fn run_auto_open(window: Option<String>, server: Option<String>) -> Result<()> {
     if !pane_id.is_empty() {
         tmux.set_var(&var_key, &pane_id)?;
     }
+
+    Ok(())
+}
+
+fn run_setup(server: Option<String>) -> Result<()> {
+    let tmux = tmux::Tmux::new(server.clone());
+
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+
+    let server_flag = match &server {
+        Some(s) => format!(" --server {}", s),
+        None => String::new(),
+    };
+
+    // The auto-open command called by each hook.
+    // #{window_id} is a tmux format string expanded by tmux at hook-fire time.
+    let auto_open_cmd = format!(
+        "{} auto-open --window #{{window_id}}{}",
+        binary, server_flag
+    );
+
+    // Hooks that cover all cases: switching windows, creating new windows.
+    let hooks = ["after-select-window", "after-new-window"];
+
+    for hook in hooks {
+        tmux.cmd()
+            .args(["set-hook", "-g", hook,
+                   &format!("run-shell '{}'", auto_open_cmd)])
+            .status()?;
+        println!("✓ Installed hook: {}", hook);
+    }
+
+    // Enable sticky mode so auto-open actually runs its logic.
+    tmux.set_var("@ccmux_sticky", "1")?;
+    println!("✓ Sticky mode enabled");
+
+    println!();
+    println!("Sidebars will now open automatically whenever Claude is running in a window.");
+    println!();
+    println!("To persist across tmux restarts, add to ~/.tmux.conf:");
+    println!();
+    for hook in hooks {
+        println!("  set-hook -g {} \"run-shell '{}'\"", hook, auto_open_cmd);
+    }
+    println!();
+    println!("To disable:  ccmux close  (closes all sidebars)");
+    println!("             tmux set-option -g @ccmux_sticky 0");
 
     Ok(())
 }
