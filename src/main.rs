@@ -477,17 +477,17 @@ fn run_setup(server: Option<String>) -> Result<()> {
     println!("✓ Sticky mode enabled");
 
     // Bind PREFIX+Ctrl+1..9 (and Ctrl+0 for session 10) to focus by number.
+    // Pass -b and the shell command as separate args — no shell quoting needed.
     for n in 1..=9usize {
         let focus_cmd = format!("{} focus {}{}", binary, n, server_flag);
         tmux.cmd()
-            .args(["bind-key", &format!("C-{}", n),
-                   "run-shell", &format!("-b '{}'", focus_cmd)])
+            .args(["bind-key", &format!("C-{}", n), "run-shell", "-b", &focus_cmd])
             .status()?;
     }
     // Ctrl+0 → session 10
     let focus10_cmd = format!("{} focus 10{}", binary, server_flag);
     tmux.cmd()
-        .args(["bind-key", "C-0", "run-shell", &format!("-b '{}'", focus10_cmd)])
+        .args(["bind-key", "C-0", "run-shell", "-b", &focus10_cmd])
         .status()?;
     println!("✓ Installed key bindings: PREFIX+Ctrl+1..9 (and Ctrl+0 for session 10)");
 
