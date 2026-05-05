@@ -72,15 +72,15 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Rename { text: String::new() };
         }
         KeyCode::Char('n') => {
+            app.start_folder_pick();
+        }
+        KeyCode::Char('c') => {
             app.mode = Mode::NewWindow {
                 name: String::new(),
                 color_idx: 0,
                 launch_claude: true,
                 field: 0,
             };
-        }
-        KeyCode::Char('N') => {
-            app.start_folder_pick();
         }
         KeyCode::Char('w') => {
             app.start_worktree_flow();
