@@ -60,10 +60,13 @@ pub fn run(server: Option<String>) {
             let new_status = detect_status(&content);
             let prev = pane_status.get(pane_id).cloned().unwrap_or(ClaudeCodeStatus::Unknown);
 
-            if new_status == ClaudeCodeStatus::WaitingInput
-                && prev != ClaudeCodeStatus::WaitingInput
-                && !pane_active
-            {
+            // Notify when Claude finishes working (→ Idle) or hits a mid-task prompt (→ WaitingInput).
+            // Require that the previous state was Working so we don't spam on startup.
+            let was_busy = prev == ClaudeCodeStatus::Working;
+            let now_needs_attention = matches!(new_status,
+                ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
+
+            if was_busy && now_needs_attention && !pane_active {
                 let window_name = tmux.cmd()
                     .args(["display-message", "-t", pane_id, "-p", "#{window_name}"])
                     .output()
@@ -87,7 +90,7 @@ pub fn run(server: Option<String>) {
 
 fn fire_notification(window_name: &str) {
     let script = format!(
-        "display notification {:?} with title \"ccmux\" subtitle \"Waiting for input\"",
+        "display notification {:?} with title \"ccmux\" subtitle \"Done — ready for input\"",
         window_name
     );
     let _ = std::process::Command::new("osascript")
