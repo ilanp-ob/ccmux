@@ -1178,7 +1178,7 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_clr))
-        .title(Span::styled(" N  New Session ", Style::default().fg(title_clr)))
+        .title(Span::styled(" New Session ", Style::default().fg(title_clr)))
         .style(Style::default().bg(bg));
 
     let inner = block.inner(area);
@@ -1222,28 +1222,39 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
             // Scroll to keep cursor visible
             let scroll = if clamped >= list_h { clamped + 1 - list_h } else { 0 };
 
+            let can_create = filtered_len == 0 && !filter.is_empty();
+
             let mut list_lines: Vec<Line> = Vec::new();
-            for (i, path) in filtered.iter().enumerate().skip(scroll).take(list_h) {
-                let name = path.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let is_git = path.join(".git").exists();
-                let is_selected = i == clamped;
-
-                let (line_bg, name_style) = if is_selected {
-                    (sel_bg, Style::default().fg(Color::White).bg(sel_bg).add_modifier(Modifier::BOLD))
-                } else {
-                    (bg, Style::default().fg(Color::Rgb(200, 210, 230)).bg(bg))
-                };
-
-                let prefix = if is_git { "⎇ " } else { "  " };
-                let prefix_clr = if is_git { git_clr } else { dim_clr };
-
+            if can_create {
+                // No matching dir — offer to create one.
                 list_lines.push(Line::from(vec![
-                    Span::styled(" ", Style::default().bg(line_bg)),
-                    Span::styled(prefix, Style::default().fg(prefix_clr).bg(line_bg)),
-                    Span::styled(name, name_style),
+                    Span::styled(" + ", Style::default().fg(git_clr).bg(sel_bg)),
+                    Span::styled("Create  ", Style::default().fg(git_clr).bg(sel_bg)),
+                    Span::styled(filter.as_str(), Style::default().fg(Color::White).bg(sel_bg).add_modifier(Modifier::BOLD)),
                 ]));
+            } else {
+                for (i, path) in filtered.iter().enumerate().skip(scroll).take(list_h) {
+                    let name = path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let is_git = path.join(".git").exists();
+                    let is_selected = i == clamped;
+
+                    let (line_bg, name_style) = if is_selected {
+                        (sel_bg, Style::default().fg(Color::White).bg(sel_bg).add_modifier(Modifier::BOLD))
+                    } else {
+                        (bg, Style::default().fg(Color::Rgb(200, 210, 230)).bg(bg))
+                    };
+
+                    let prefix = if is_git { "⎇ " } else { "  " };
+                    let prefix_clr = if is_git { git_clr } else { dim_clr };
+
+                    list_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(line_bg)),
+                        Span::styled(prefix, Style::default().fg(prefix_clr).bg(line_bg)),
+                        Span::styled(name, name_style),
+                    ]));
+                }
             }
 
             // Pad remaining rows
@@ -1252,16 +1263,25 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             // Hint row
-            let hint_line = Line::from(vec![
-                Span::styled(" Enter", Style::default().fg(border_clr).bg(bg)),
-                Span::styled(":open  ", Style::default().fg(dim_clr).bg(bg)),
-                Span::styled("→", Style::default().fg(border_clr).bg(bg)),
-                Span::styled(":into  ", Style::default().fg(dim_clr).bg(bg)),
-                Span::styled("←", Style::default().fg(border_clr).bg(bg)),
-                Span::styled(":up  ", Style::default().fg(dim_clr).bg(bg)),
-                Span::styled("Esc", Style::default().fg(border_clr).bg(bg)),
-                Span::styled(":cancel", Style::default().fg(dim_clr).bg(bg)),
-            ]);
+            let hint_line = if can_create {
+                Line::from(vec![
+                    Span::styled(" Enter", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":create  ", Style::default().fg(dim_clr).bg(bg)),
+                    Span::styled("Esc", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":cancel", Style::default().fg(dim_clr).bg(bg)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(" Enter", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":open  ", Style::default().fg(dim_clr).bg(bg)),
+                    Span::styled("→", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":into  ", Style::default().fg(dim_clr).bg(bg)),
+                    Span::styled("←", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":up  ", Style::default().fg(dim_clr).bg(bg)),
+                    Span::styled("Esc", Style::default().fg(border_clr).bg(bg)),
+                    Span::styled(":cancel", Style::default().fg(dim_clr).bg(bg)),
+                ])
+            };
 
             // Layout: root_line, filter_line, list rows, hint
             let chunks = Layout::default()

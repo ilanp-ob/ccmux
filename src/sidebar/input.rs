@@ -586,6 +586,16 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                 KeyCode::Enter => {
                     if let Some(path) = filtered.get(clamped) {
                         app.execute_folder_pick((*path).clone());
+                    } else if !filter.is_empty() {
+                        // No match — create new folder with the typed name.
+                        let new_path = root.join(&filter);
+                        match std::fs::create_dir_all(&new_path) {
+                            Ok(_) => app.execute_folder_pick(new_path),
+                            Err(e) => {
+                                app.error = Some(format!("Cannot create folder: {}", e));
+                                app.mode = Mode::Normal;
+                            }
+                        }
                     }
                 }
                 KeyCode::Right if !filtered.is_empty() => {
