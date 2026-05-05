@@ -13,6 +13,110 @@ use crate::detection::{detect_static_status, detect_status};
 use crate::session::{ClaudeCodeStatus, DetectedPane, WindowGroup};
 use crate::tmux::Tmux;
 
+/// Global stats shared across all Claude Code sessions, read from statusline cache files.
+#[derive(Default, Clone)]
+pub struct GlobalInfo {
+    pub usage_5h: Option<f32>,
+    pub usage_7d: Option<f32>,
+    pub reset_5h_left: Option<String>,
+    pub reset_7d_left: Option<String>,
+    pub mp_drawers: Option<String>,
+    pub mp_size: Option<String>,
+    pub mp_wings: Option<u32>,
+    pub mp_rooms: Option<u32>,
+    pub mp_ago: Option<String>,
+}
+
+impl GlobalInfo {
+    pub fn has_data(&self) -> bool {
+        self.usage_5h.is_some() || self.mp_drawers.is_some()
+    }
+
+    /// Read from ~/.cache/cc-usage.json and ~/.cache/cc-mempalace.json (written by statusline).
+    pub fn load() -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let mut info = GlobalInfo::default();
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| String::from("~"));
+        let cache = std::path::Path::new(&home).join(".cache");
+
+        if let Ok(s) = std::fs::read_to_string(cache.join("cc-usage.json")) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                info.usage_5h = v["five_hour"]["utilization"].as_f64().map(|x| x as f32);
+                info.usage_7d = v["seven_day"]["utilization"].as_f64().map(|x| x as f32);
+                if let Some(ts) = v["five_hour"]["resets_at"].as_str() {
+                    info.reset_5h_left = format_time_remaining(ts, now);
+                }
+                if let Some(ts) = v["seven_day"]["resets_at"].as_str() {
+                    info.reset_7d_left = format_time_remaining(ts, now);
+                }
+            }
+        }
+
+        if let Ok(s) = std::fs::read_to_string(cache.join("cc-mempalace.json")) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                if let Some(n) = v["drawers"].as_u64() {
+                    info.mp_drawers = Some(if n >= 1000 {
+                        format!("{:.1}K", n as f64 / 1000.0)
+                    } else {
+                        n.to_string()
+                    });
+                }
+                info.mp_size = v["size"].as_str().map(String::from);
+                info.mp_wings = v["wings"].as_u64().map(|x| x as u32);
+                info.mp_rooms = v["rooms"].as_u64().map(|x| x as u32);
+                if let Some(ts) = v["last"].as_str() {
+                    info.mp_ago = format_time_ago(ts, now);
+                }
+            }
+        }
+
+        info
+    }
+}
+
+/// Parse "YYYY-MM-DDTHH:MM:SS..." (UTC) to Unix epoch seconds using Julian Day formula.
+fn utc_to_epoch(ts: &str) -> Option<i64> {
+    let b = ts.as_bytes();
+    if b.len() < 19 { return None; }
+    let s = std::str::from_utf8(&b[..19]).ok()?;
+    let y: i64 = s[0..4].parse().ok()?;
+    let mo: i64 = s[5..7].parse().ok()?;
+    let d: i64 = s[8..10].parse().ok()?;
+    let h: i64 = s[11..13].parse().ok()?;
+    let mi: i64 = s[14..16].parse().ok()?;
+    let sec: i64 = s[17..19].parse().ok()?;
+    let (y, mo) = if mo <= 2 { (y - 1, mo + 12) } else { (y, mo) };
+    let a = y / 100;
+    let jdn = (365.25_f64 * (y + 4716) as f64) as i64
+            + (30.6001_f64 * (mo + 1) as f64) as i64
+            + d + (2 - a + a / 4) - 1524;
+    Some((jdn - 2_440_588) * 86400 + h * 3600 + mi * 60 + sec)
+}
+
+fn format_time_remaining(ts: &str, now: i64) -> Option<String> {
+    let target = utc_to_epoch(ts)?;
+    let rem = (target - now).max(0);
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    Some(if h > 0 { format!("{}h{}m", h, m) } else { format!("{}m", m) })
+}
+
+fn format_time_ago(ts: &str, now: i64) -> Option<String> {
+    let target = utc_to_epoch(ts)?;
+    let diff = (now - target).max(0);
+    Some(match diff {
+        d if d >= 86400 => format!("{}d ago", d / 86400),
+        d if d >= 3600  => format!("{}h ago", d / 3600),
+        d if d >= 60    => format!("{}m ago", d / 60),
+        _               => "just now".into(),
+    })
+}
+
 pub struct App {
     /// All detected pane groups (session-wide, all servers)
     pub groups: Vec<WindowGroup>,
@@ -48,6 +152,8 @@ pub struct App {
     pub fetch_handle: Option<std::thread::JoinHandle<anyhow::Result<Vec<crate::git::BranchEntry>>>>,
     pub fetch_repo_root: Option<String>,
     last_nav_hint_tick: Instant,
+    pub global_info: GlobalInfo,
+    last_global_info_tick: Instant,
 }
 
 impl App {
@@ -98,6 +204,8 @@ impl App {
             fetch_handle: None,
             fetch_repo_root: None,
             last_nav_hint_tick: Instant::now(),
+            global_info: GlobalInfo::load(),
+            last_global_info_tick: Instant::now(),
         })
     }
 
@@ -409,6 +517,16 @@ impl App {
             }
         }
         false
+    }
+
+    /// Reload global info from statusline cache files. Returns true if called (always triggers redraw).
+    pub fn tick_global_info(&mut self) -> bool {
+        if self.last_global_info_tick.elapsed() < Duration::from_secs(30) {
+            return false;
+        }
+        self.last_global_info_tick = Instant::now();
+        self.global_info = GlobalInfo::load();
+        true
     }
 
     /// Check whether the background branch-fetch thread finished. Returns true if mode changed.

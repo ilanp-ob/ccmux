@@ -41,14 +41,22 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => 2,
         _ => 1,
     };
+    let info_h: u16 = if app.global_info.has_data() { 2 } else { 0 };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(footer_h)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(info_h),
+            Constraint::Length(footer_h),
+        ])
         .split(inner);
 
     render_list(frame, app, chunks[0], sidebar_bg);
-    render_footer(frame, app, chunks[1]);
+    if info_h > 0 {
+        render_global_info(frame, app, chunks[1]);
+    }
+    render_footer(frame, app, chunks[2]);
 
     if matches!(app.mode, Mode::Help) {
         render_help_overlay(frame, inner);
@@ -398,6 +406,74 @@ fn hint(h: &'static str) -> Span<'static> {
 
 fn sep() -> Span<'static> {
     Span::raw("  ")
+}
+
+fn usage_color(pct: f32) -> Color {
+    if pct >= 80.0 { Color::Rgb(255, 100, 80) }
+    else if pct >= 50.0 { Color::Rgb(255, 220, 80) }
+    else { Color::Rgb(150, 220, 150) }
+}
+
+fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
+    let gi = &app.global_info;
+
+    // Line 1: usage
+    let mut usage_spans: Vec<Span> = Vec::new();
+    if let Some(u5) = gi.usage_5h {
+        let clr = usage_color(u5);
+        let label = format!("5h:{:.0}%", u5);
+        usage_spans.push(Span::styled(label, Style::default().fg(clr)));
+        if let Some(left) = &gi.reset_5h_left {
+            usage_spans.push(Span::styled(
+                format!("({})", left),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+    if let Some(u7) = gi.usage_7d {
+        if !usage_spans.is_empty() {
+            usage_spans.push(Span::raw("  "));
+        }
+        let clr = usage_color(u7);
+        let label = format!("7d:{:.0}%", u7);
+        usage_spans.push(Span::styled(label, Style::default().fg(clr)));
+        if let Some(left) = &gi.reset_7d_left {
+            usage_spans.push(Span::styled(
+                format!("({})", left),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    // Line 2: mempalace
+    let mut mp_parts: Vec<String> = Vec::new();
+    if let Some(d) = &gi.mp_drawers {
+        let mut s = d.clone();
+        if let Some(sz) = &gi.mp_size {
+            s.push_str(&format!("({})", sz));
+        }
+        mp_parts.push(s);
+    }
+    if let (Some(w), Some(r)) = (gi.mp_wings, gi.mp_rooms) {
+        mp_parts.push(format!("{}W/{}R", w, r));
+    }
+    if let Some(ago) = &gi.mp_ago {
+        mp_parts.push(ago.clone());
+    }
+    let mp_str = mp_parts.join(" · ");
+
+    let mp_clr = Color::Rgb(180, 150, 220);
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(usage_spans),
+            Line::from(vec![
+                Span::styled("🏛 ", Style::default().fg(mp_clr)),
+                Span::styled(mp_str, Style::default().fg(mp_clr)),
+            ]),
+        ]),
+        area,
+    );
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
