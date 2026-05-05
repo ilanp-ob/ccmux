@@ -301,6 +301,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             Entry::Item(item) => {
                 let sc = status_color(&item.status);
                 let icon = item.status.icon();
+                let is_alerted = app.alerted_windows.contains(&item.window_id);
+                const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
                 let row_bg: Color = if item.is_sel { SEL_BG }
                     else if item.pane_idx % 2 == 0 { ALT_BG }
                     else { sidebar_bg };
@@ -316,12 +318,16 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 };
                 let sel_span = if item.is_sel {
                     Span::styled("▌", sp(sc))
+                } else if is_alerted {
+                    Span::styled("▌", sp(ALERT_COLOR))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     Span::styled("▌", sp(Color::Yellow))
                 } else {
                     Span::styled(" ", base)
                 };
-                let name_fg = if !item.is_sel && item.status == ClaudeCodeStatus::WaitingInput {
+                let name_fg = if !item.is_sel && is_alerted {
+                    ALERT_COLOR
+                } else if !item.is_sel && item.status == ClaudeCodeStatus::WaitingInput {
                     Color::Yellow
                 } else {
                     Color::White
@@ -345,6 +351,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
 
                 let cont_pipe: Option<Span> = if item.is_sel {
                     Some(Span::styled("▌", sp(sc)))
+                } else if is_alerted {
+                    Some(Span::styled("▌", sp(ALERT_COLOR)))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     Some(Span::styled("▌", sp(Color::Yellow)))
                 } else {
@@ -378,6 +386,13 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         Span::styled(" ", base), Span::styled("▌", sp(sc)),
                         Span::styled(format!(" {}  ", item.path_short), sp(Color::DarkGray)),
                         Span::styled(status_label, sp(sc)),
+                        fill(),
+                    ]).style(base));
+                } else if is_alerted {
+                    lines.push(Line::from(vec![
+                        Span::styled(" ", base), Span::styled("▌", sp(ALERT_COLOR)),
+                        Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        Span::styled("● Done", sp(ALERT_COLOR)),
                         fill(),
                     ]).style(base));
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
@@ -592,7 +607,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         key("i"), hint(" send"), sep(),
                         key("l"), hint(" actions"), sep(),
                         key("w"), hint(" worktree"), sep(),
-                        key("n"), hint(" folder"), sep(),
                         key("c"), hint(" new"), sep(),
                         key("r"), hint(" rename"), sep(),
                         key("K"), hint(" kill"),
@@ -709,8 +723,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         section("Actions"),
         row("i",      "Send message to Claude session"),
         row("l",      "Action menu (PR ops, delete worktree)"),
-        row("n",      "New session — pick folder (~/dev or ~)"),
-        row("c",      "New plain tmux window"),
+        row("c",      "New session — pick folder, launch Claude"),
         row("w",      "New worktree (fetch → branch → options)"),
         row("r",      "Rename current window"),
         row("K",      "Kill current window (confirm)"),

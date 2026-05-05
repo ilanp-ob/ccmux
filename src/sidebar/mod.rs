@@ -4,7 +4,7 @@ pub mod render;
 
 pub use mode::Mode;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use anyhow::Result;
 
@@ -134,6 +134,9 @@ pub struct App {
     last_nav_hint_tick: Instant,
     pub global_info: GlobalInfo,
     last_global_info_tick: Instant,
+    /// Window IDs that have a pending @ccmux_alert (notified but not yet focused).
+    pub alerted_windows: HashSet<String>,
+    last_alerts_tick: Instant,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -204,6 +207,8 @@ impl App {
             last_nav_hint_tick: Instant::now(),
             global_info: GlobalInfo::load(),
             last_global_info_tick: Instant::now(),
+            alerted_windows: HashSet::new(),
+            last_alerts_tick: Instant::now(),
         })
     }
 
@@ -388,6 +393,9 @@ impl App {
         }
         // Always land on the Claude pane (split-window steals focus, so this re-focuses it).
         let _ = tmux.select_pane(&pane_id);
+        // Clear the alert — user is now looking at this session.
+        let _ = tmux.del_window_var(&window_id, "@ccmux_alert");
+        self.alerted_windows.remove(&window_id);
     }
 
     /// Spawn a sidebar in `window_id` if one isn't already there.
@@ -507,6 +515,31 @@ impl App {
             }
         }
         false
+    }
+
+    /// Poll @ccmux_alert on each visible window. Returns true if alert set changed.
+    pub fn tick_alerts(&mut self) -> bool {
+        if self.last_alerts_tick.elapsed() < Duration::from_secs(2) {
+            return false;
+        }
+        self.last_alerts_tick = Instant::now();
+
+        let tmux = Tmux::new(self.managed_server.clone());
+        let window_ids: HashSet<String> = self.groups.iter()
+            .flat_map(|g| g.panes.iter())
+            .map(|p| p.window_id.clone())
+            .collect();
+
+        let mut new_alerted: HashSet<String> = HashSet::new();
+        for wid in &window_ids {
+            if tmux.get_window_var(wid, "@ccmux_alert").as_deref() == Some("1") {
+                new_alerted.insert(wid.clone());
+            }
+        }
+
+        let changed = new_alerted != self.alerted_windows;
+        self.alerted_windows = new_alerted;
+        changed
     }
 
     /// Reload global info from statusline cache files. Returns true if called (always triggers redraw).

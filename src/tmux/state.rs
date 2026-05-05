@@ -40,6 +40,14 @@ impl Tmux {
         Ok(())
     }
 
+    /// Unset a window-scoped tmux variable.
+    pub fn del_window_var(&self, window_id: &str, key: &str) -> Result<()> {
+        self.cmd()
+            .args(["set-window-option", "-ut", window_id, key])
+            .status()?;
+        Ok(())
+    }
+
     /// Read a window-scoped variable from a specific window.
     pub fn get_window_var(&self, window_id: &str, key: &str) -> Option<String> {
         let output = self.cmd()
