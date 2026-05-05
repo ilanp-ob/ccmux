@@ -208,7 +208,7 @@ fn run_toggle(server: Option<String>) -> Result<()> {
         None => format!("{} sidebar", binary),
     };
 
-    let pane_id = tmux.split_sidebar(&session, config.sidebar.width, &sidebar_cmd)?;
+    let pane_id = tmux.split_sidebar(&current_window, config.sidebar.width, &sidebar_cmd)?;
     tmux.set_var(&var_key, &pane_id)?;
     let _ = tmux.select_pane(&pane_id);
 
@@ -434,17 +434,7 @@ fn run_auto_open(window: Option<String>, server: Option<String>) -> Result<()> {
         None => format!("{} sidebar", binary),
     };
 
-    let width_str = config.sidebar.width.to_string();
-    let output = tmux.cmd()
-        .args([
-            "split-window", "-hb",
-            "-l", &width_str,
-            "-t", &window_id,
-            "-P", "-F", "#{pane_id}",
-            &sidebar_cmd,
-        ])
-        .output()?;
-    let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let pane_id = tmux.split_sidebar(&window_id, config.sidebar.width, &sidebar_cmd)?;
     if !pane_id.is_empty() {
         tmux.set_var(&var_key, &pane_id)?;
     }
