@@ -41,7 +41,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => 2,
         _ => 1,
     };
-    let info_h: u16 = if app.global_info.has_data() { 4 } else { 0 }; // top sep + 2 data rows + bottom sep
+    // top-title-sep + usage + mid-title-sep + mempalace + bottom-sep
+    let info_h: u16 = if app.global_info.has_data() { 5 } else { 0 };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -540,14 +541,32 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(mp_str, dim(mp_clr)),
     ]);
 
-    let sep = || Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        dim(Color::Rgb(45, 48, 58)),
-    ));
+    let w = area.width as usize;
+    let sep_clr = Color::Rgb(45, 48, 58);
+    let title_clr = Color::Rgb(85, 90, 110);
+
+    let titled_sep = |title: &str| -> Line {
+        let label = format!(" {} ", title);
+        let label_w = label.chars().count();
+        let dashes = w.saturating_sub(label_w);
+        let left = dashes / 3;
+        let right = dashes - left;
+        Line::from(vec![
+            Span::styled("─".repeat(left), dim(sep_clr)),
+            Span::styled(label, Style::default().fg(title_clr).bg(INFO_BG)),
+            Span::styled("─".repeat(right), dim(sep_clr)),
+        ])
+    };
+    let plain_sep = Line::from(Span::styled("─".repeat(w), dim(sep_clr)));
 
     frame.render_widget(
-        Paragraph::new(vec![sep(), Line::from(usage_spans), mp_line, sep()])
-            .style(info_style),
+        Paragraph::new(vec![
+            titled_sep("Claude usage"),
+            Line::from(usage_spans),
+            titled_sep("MemPalace"),
+            mp_line,
+            plain_sep,
+        ]).style(info_style),
         area,
     );
 }

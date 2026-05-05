@@ -29,20 +29,43 @@ impl Tmux {
     }
 
     /// Split current window horizontally to create the sidebar pane.
+    /// Always targets the leftmost pane (pane_left == 0) so the sidebar lands
+    /// at the left edge regardless of which pane currently has focus.
     /// Returns the new pane_id.
     pub fn split_sidebar(&self, session: &str, width: u16, cmd: &str) -> Result<String> {
         let width_str = width.to_string();
+        // Target the leftmost pane so -hb puts the sidebar at the far left.
+        let target = self.leftmost_pane_in_session(session)
+            .unwrap_or_else(|| session.to_string());
         let output = self.cmd()
             .args([
                 "split-window", "-hb",
                 "-l", &width_str,
-                "-t", session,
+                "-t", &target,
                 "-P", "-F", "#{pane_id}",
                 cmd,
             ])
             .output()
             .context("tmux split-window failed")?;
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Return the pane_id of the leftmost pane (pane_left == 0) in the active
+    /// window of `session`, or None if it cannot be determined.
+    fn leftmost_pane_in_session(&self, session: &str) -> Option<String> {
+        let out = self.cmd()
+            .args(["list-panes", "-t", session, "-F", "#{pane_id} #{pane_left}"])
+            .output().ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                let id = parts.next()?.to_string();
+                let left: u32 = parts.next()?.parse().ok()?;
+                Some((left, id))
+            })
+            .min_by_key(|(left, _)| *left)
+            .map(|(_, id)| id)
     }
 
     /// Kill a pane by its pane_id.
