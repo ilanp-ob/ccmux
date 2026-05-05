@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => 2,
         _ => 1,
     };
-    let info_h: u16 = if app.global_info.has_data() { 3 } else { 0 }; // separator + 2 data rows
+    let info_h: u16 = if app.global_info.has_data() { 4 } else { 0 }; // top sep + 2 data rows + bottom sep
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -540,8 +540,13 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(mp_str, dim(mp_clr)),
     ]);
 
+    let sep = || Line::from(Span::styled(
+        "─".repeat(area.width as usize),
+        dim(Color::Rgb(45, 48, 58)),
+    ));
+
     frame.render_widget(
-        Paragraph::new(vec![sep_line, Line::from(usage_spans), mp_line])
+        Paragraph::new(vec![sep(), Line::from(usage_spans), mp_line, sep()])
             .style(info_style),
         area,
     );
