@@ -24,7 +24,7 @@ pub fn run(server: Option<String>) {
 
         let Ok(out) = tmux.cmd()
             .args(["list-panes", "-aF",
-                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{pane_active}\t#{session_name}"])
+                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_active}\t#{session_name}"])
             .output()
         else {
             std::thread::sleep(Duration::from_secs(2));
@@ -35,7 +35,7 @@ pub fn run(server: Option<String>) {
             let parts: Vec<&str> = line.splitn(5, '\t').collect();
             if parts.len() < 5 { continue; }
 
-            let (pane_id, command, window_id, pane_active, _session) =
+            let (pane_id, command, window_id, window_active, _session) =
                 (parts[0], parts[1], parts[2], parts[3] == "1", parts[4]);
 
             if !command.contains("claude") && !command.contains("ocli") { continue; }
@@ -66,7 +66,7 @@ pub fn run(server: Option<String>) {
             let now_needs_attention = matches!(new_status,
                 ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
 
-            if was_busy && now_needs_attention && !pane_active {
+            if was_busy && now_needs_attention && !window_active {
                 let window_name = tmux.cmd()
                     .args(["display-message", "-t", pane_id, "-p", "#{window_name}"])
                     .output()
@@ -77,7 +77,7 @@ pub fn run(server: Option<String>) {
                 set_alert(&tmux, window_id, true);
             }
 
-            if pane_active {
+            if window_active {
                 set_alert(&tmux, window_id, false);
             }
 
