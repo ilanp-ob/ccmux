@@ -476,14 +476,35 @@ fn run_setup(server: Option<String>) -> Result<()> {
     tmux.set_var("@ccmux_sticky", "1")?;
     println!("✓ Sticky mode enabled");
 
+    // Bind PREFIX+Ctrl+1..9 (and Ctrl+0 for session 10) to focus by number.
+    for n in 1..=9usize {
+        let focus_cmd = format!("{} focus {}{}", binary, n, server_flag);
+        tmux.cmd()
+            .args(["bind-key", &format!("C-{}", n),
+                   "run-shell", &format!("-b '{}'", focus_cmd)])
+            .status()?;
+    }
+    // Ctrl+0 → session 10
+    let focus10_cmd = format!("{} focus 10{}", binary, server_flag);
+    tmux.cmd()
+        .args(["bind-key", "C-0", "run-shell", &format!("-b '{}'", focus10_cmd)])
+        .status()?;
+    println!("✓ Installed key bindings: PREFIX+Ctrl+1..9 (and Ctrl+0 for session 10)");
+
     println!();
     println!("Sidebars will now open automatically whenever Claude is running in a window.");
+    println!("Jump to any Claude session with PREFIX+Ctrl+NUMBER from anywhere in tmux.");
     println!();
     println!("To persist across tmux restarts, add to ~/.tmux.conf:");
     println!();
     for hook in hooks {
         println!("  set-hook -g {} \"run-shell -b '{}'\"", hook, auto_open_cmd);
     }
+    for n in 1..=9usize {
+        let focus_cmd = format!("{} focus {}{}", binary, n, server_flag);
+        println!("  bind-key C-{} run-shell -b '{}'", n, focus_cmd);
+    }
+    println!("  bind-key C-0 run-shell -b '{}'", focus10_cmd);
     println!();
     println!("To disable:  ccmux close  (closes all sidebars)");
     println!("             tmux set-option -g @ccmux_sticky 0");
