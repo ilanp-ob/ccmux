@@ -464,9 +464,10 @@ fn usage_color(pct: f32) -> Color {
 
 fn fmt_time_left(target_epoch: i64, now: i64) -> String {
     let rem = (target_epoch - now).max(0);
-    let h = rem / 3600;
+    let d = rem / 86400;
+    let h = (rem % 86400) / 3600;
     let m = (rem % 3600) / 60;
-    if h > 0 { format!("{}h{}m", h, m) } else { format!("{}m", m) }
+    if d > 0 { format!("{}d{}h", d, h) } else if h > 0 { format!("{}h{}m", h, m) } else { format!("{}m", m) }
 }
 
 fn fmt_time_ago(source_epoch: i64, now: i64) -> String {

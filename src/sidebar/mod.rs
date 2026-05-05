@@ -392,25 +392,13 @@ impl App {
             Some(s) => format!("{} sidebar --server {}", binary, s),
             None => format!("{} sidebar", binary),
         };
-        let width = self.config.sidebar.width.to_string();
 
-        let output = tmux.cmd()
-            .args([
-                "split-window", "-hb",
-                "-l", &width,
-                "-t", window_id,
-                "-P", "-F", "#{pane_id}",
-                &sidebar_cmd,
-            ])
-            .output();
-
-        if let Ok(out) = output {
-            let new_pane = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if let Ok(new_pane) = tmux.split_sidebar(window_id, self.config.sidebar.width, &sidebar_cmd) {
             if !new_pane.is_empty() {
                 let _ = tmux.set_var(&var_key, &new_pane);
                 // Tell the new sidebar which Claude pane to pre-select.
                 let _ = tmux.set_var(&hint_key, claude_pane_id);
-                // Return focus to the Claude pane — split-window moved it to the new sidebar.
+                // Return focus to the Claude pane — split_sidebar moved it to the new sidebar.
                 let _ = tmux.select_pane(claude_pane_id);
             }
         }
