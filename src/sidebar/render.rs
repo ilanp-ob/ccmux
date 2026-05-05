@@ -557,15 +557,13 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("─".repeat(right), dim(sep_clr)),
         ])
     };
-    let plain_sep = Line::from(Span::styled("─".repeat(w), dim(sep_clr)));
-
     frame.render_widget(
         Paragraph::new(vec![
             titled_sep("Claude usage"),
             Line::from(usage_spans),
             titled_sep("MemPalace"),
             mp_line,
-            plain_sep,
+            titled_sep("Shortcuts"),
         ]).style(info_style),
         area,
     );
