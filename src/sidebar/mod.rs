@@ -21,6 +21,7 @@ pub struct GlobalInfo {
     /// Unix epoch secs — formatted at render time so display is always current.
     pub reset_5h_at: Option<i64>,
     pub reset_7d_at: Option<i64>,
+    pub usage_updated_at: Option<i64>,
     pub mp_drawers: Option<String>,
     pub mp_size: Option<String>,
     pub mp_wings: Option<u32>,
@@ -39,13 +40,19 @@ impl GlobalInfo {
         let home = std::env::var("HOME").unwrap_or_else(|_| String::from("~"));
         let cache = std::path::Path::new(&home).join(".cache");
 
-        if let Ok(s) = std::fs::read_to_string(cache.join("cc-usage.json")) {
+        let usage_path = cache.join("cc-usage.json");
+        if let Ok(s) = std::fs::read_to_string(&usage_path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
                 info.usage_5h = v["five_hour"]["utilization"].as_f64().map(|x| x as f32);
                 info.usage_7d = v["seven_day"]["utilization"].as_f64().map(|x| x as f32);
                 info.reset_5h_at = v["five_hour"]["resets_at"].as_str().and_then(utc_to_epoch);
                 info.reset_7d_at = v["seven_day"]["resets_at"].as_str().and_then(utc_to_epoch);
             }
+            info.usage_updated_at = std::fs::metadata(&usage_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64);
         }
 
         if let Ok(s) = std::fs::read_to_string(cache.join("cc-mempalace.json")) {

@@ -519,6 +519,13 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
             ));
         }
     }
+    if let Some(at) = gi.usage_updated_at {
+        usage_spans.push(Span::raw("  "));
+        usage_spans.push(Span::styled(
+            fmt_time_ago(at, now),
+            dim(Color::Rgb(70, 75, 95)),
+        ));
+    }
 
     // Row 2: MemPalace stats
     let mp_clr = Color::Rgb(165, 135, 210);
