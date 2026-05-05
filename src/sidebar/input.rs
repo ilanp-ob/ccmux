@@ -563,6 +563,53 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                 app.folder_scan_root = None;
             }
         }
+        FolderPickStep::Options { path, is_new, mut opts } => {
+            use crate::config::{AVAILABLE_MODELS, AVAILABLE_EFFORTS, WINDOW_COLORS};
+            macro_rules! back {
+                () => { Mode::FolderPick(FolderPickStep::Options {
+                    path: path.clone(), is_new, opts: opts.clone(),
+                }) };
+            }
+            match key.code {
+                KeyCode::Esc => { app.mode = Mode::Normal; }
+                KeyCode::Enter => { app.execute_folder_pick(path, is_new, &opts); }
+                KeyCode::Tab => {
+                    opts.field = (opts.field + 1) % 5;
+                    app.mode = back!();
+                }
+                KeyCode::BackTab => {
+                    opts.field = if opts.field == 0 { 4 } else { opts.field - 1 };
+                    app.mode = back!();
+                }
+                KeyCode::Left => {
+                    match opts.field {
+                        0 => opts.model_idx = if opts.model_idx == 0 { AVAILABLE_MODELS.len() - 1 } else { opts.model_idx - 1 },
+                        1 => opts.effort_idx = if opts.effort_idx == 0 { AVAILABLE_EFFORTS.len() - 1 } else { opts.effort_idx - 1 },
+                        3 => opts.color_idx = if opts.color_idx == 0 { WINDOW_COLORS.len() - 1 } else { opts.color_idx - 1 },
+                        _ => {}
+                    }
+                    app.mode = back!();
+                }
+                KeyCode::Right => {
+                    match opts.field {
+                        0 => opts.model_idx = (opts.model_idx + 1) % AVAILABLE_MODELS.len(),
+                        1 => opts.effort_idx = (opts.effort_idx + 1) % AVAILABLE_EFFORTS.len(),
+                        3 => opts.color_idx = (opts.color_idx + 1) % WINDOW_COLORS.len(),
+                        _ => {}
+                    }
+                    app.mode = back!();
+                }
+                KeyCode::Char(' ') => {
+                    match opts.field {
+                        2 => opts.launch_claude = !opts.launch_claude,
+                        4 => opts.open_vscode = !opts.open_vscode,
+                        _ => {}
+                    }
+                    app.mode = back!();
+                }
+                _ => {}
+            }
+        }
         FolderPickStep::Picking { root, dirs, filter, cursor } => {
             let filtered: Vec<&PathBuf> = dirs.iter()
                 .filter(|d| d.file_name()
@@ -585,17 +632,17 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                 }
                 KeyCode::Enter => {
                     if let Some(path) = filtered.get(clamped) {
-                        app.execute_folder_pick((*path).clone());
+                        app.mode = Mode::FolderPick(FolderPickStep::Options {
+                            path: (*path).clone(),
+                            is_new: false,
+                            opts: crate::sidebar::mode::WorktreeOpts::default(),
+                        });
                     } else if !filter.is_empty() {
-                        // No match — create new folder with the typed name.
-                        let new_path = root.join(&filter);
-                        match std::fs::create_dir_all(&new_path) {
-                            Ok(_) => app.execute_folder_pick(new_path),
-                            Err(e) => {
-                                app.error = Some(format!("Cannot create folder: {}", e));
-                                app.mode = Mode::Normal;
-                            }
-                        }
+                        app.mode = Mode::FolderPick(FolderPickStep::Options {
+                            path: root.join(&filter),
+                            is_new: true,
+                            opts: crate::sidebar::mode::WorktreeOpts::default(),
+                        });
                     }
                 }
                 KeyCode::Right if !filtered.is_empty() => {

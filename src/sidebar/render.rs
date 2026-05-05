@@ -1302,8 +1302,83 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
             );
             frame.render_widget(Paragraph::new(hint_line).style(Style::default().bg(bg)), chunks[3]);
         }
+        Mode::FolderPick(FolderPickStep::Options { path, is_new, opts }) => {
+            let label = path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let prefix = if *is_new { "Create" } else { "Open" };
+            let title = format!(" {} \"{}\" — options ", prefix, label);
+            render_options_overlay_titled(frame, inner, opts, &title);
+        }
         _ => {}
     }
+}
+
+fn render_options_overlay_titled(
+    frame: &mut Frame,
+    area: Rect,
+    opts: &crate::sidebar::mode::WorktreeOpts,
+    title: &str,
+) {
+    let field_style = |f: u8| -> (Style, Style) {
+        if opts.field == f {
+            (Style::default().fg(Color::Cyan), Style::default().fg(Color::White))
+        } else {
+            (Style::default().fg(Color::DarkGray), Style::default().fg(Color::Rgb(100, 100, 110)))
+        }
+    };
+
+    let model_name = AVAILABLE_MODELS.get(opts.model_idx).copied().unwrap_or("?");
+    let effort_name = AVAILABLE_EFFORTS.get(opts.effort_idx).copied().unwrap_or("?");
+    let color_name = WINDOW_COLORS.get(opts.color_idx).map(|c| c.0).unwrap_or("none");
+    let claude_check = if opts.launch_claude { "[x]" } else { "[ ]" };
+    let vscode_check = if opts.open_vscode { "[x]" } else { "[ ]" };
+
+    let (lm, vm) = field_style(0);
+    let (le, ve) = field_style(1);
+    let (lc, vc) = field_style(2);
+    let (lcol, vcol) = field_style(3);
+    let (lv, vv) = field_style(4);
+
+    let lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  Model:   ", lm),
+            Span::styled("◀ ", vm), Span::styled(model_name, vm), Span::styled(" ▶", vm),
+        ]),
+        Line::from(vec![
+            Span::styled("  Effort:  ", le),
+            Span::styled("◀ ", ve), Span::styled(effort_name, ve), Span::styled(" ▶", ve),
+        ]),
+        Line::from(vec![
+            Span::styled("  Claude:  ", lc),
+            Span::styled(format!("{} Launch claude", claude_check), vc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Color:   ", lcol),
+            Span::styled("◀ ", vcol), Span::styled(color_name, vcol), Span::styled(" ▶", vcol),
+        ]),
+        Line::from(vec![
+            Span::styled("  VSCode:  ", lv),
+            Span::styled(format!("{} Open VSCode", vscode_check), vv),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            key("Tab"), hint(" next  "), key("◀▶"), hint(" cycle  "),
+            key("Space"), hint(" toggle  "), key("Enter"), hint(" confirm"),
+        ]),
+    ];
+
+    let overlay = overlay_rect(area, lines.len());
+    frame.render_widget(Clear, overlay);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default()
+                .title(title.to_string())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)))
+            .style(Style::default().bg(Color::Rgb(18, 20, 26))),
+        overlay,
+    );
 }
 
 fn status_color(status: &ClaudeCodeStatus) -> Color {

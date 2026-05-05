@@ -95,6 +95,13 @@ pub enum FolderPickStep {
         filter: String,
         cursor: usize,
     },
+    /// Confirm launch options before creating the window
+    Options {
+        path: std::path::PathBuf,
+        /// Whether the directory needs to be created (typed name that doesn't exist yet)
+        is_new: bool,
+        opts: WorktreeOpts,
+    },
 }
 
 // ─── Action menu ─────────────────────────────────────────────────────────────

@@ -624,7 +624,22 @@ impl App {
         }
     }
 
-    pub fn execute_folder_pick(&mut self, path: std::path::PathBuf) {
+    pub fn execute_folder_pick(
+        &mut self,
+        path: std::path::PathBuf,
+        is_new: bool,
+        opts: &crate::sidebar::mode::WorktreeOpts,
+    ) {
+        use crate::config::{AVAILABLE_MODELS, AVAILABLE_EFFORTS, WINDOW_COLORS};
+
+        if is_new {
+            if let Err(e) = std::fs::create_dir_all(&path) {
+                self.error = Some(format!("Cannot create folder: {}", e));
+                self.mode = Mode::Normal;
+                return;
+            }
+        }
+
         let tmux = Tmux::new(self.managed_server.clone());
         let window_name = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -637,7 +652,26 @@ impl App {
                 return;
             }
         };
-        let _ = tmux.send_keys(&window_id, &format!("claude --name '{}'", window_name));
+
+        let (_, hex, tmux_colour) = WINDOW_COLORS[opts.color_idx];
+        if !tmux_colour.is_empty() {
+            let _ = tmux.set_window_color(&window_id, tmux_colour);
+        }
+
+        if opts.launch_claude {
+            let model = AVAILABLE_MODELS[opts.model_idx];
+            let effort = AVAILABLE_EFFORTS[opts.effort_idx];
+            let _ = tmux.send_keys(
+                &window_id,
+                &format!("claude --model {} --effort {} --name '{}'", model, effort, window_name),
+            );
+        }
+
+        if opts.open_vscode {
+            if !hex.is_empty() { Self::write_vscode_color(&path, hex); }
+            Self::spawn_vscode(&path);
+        }
+
         if self.sticky {
             self.ensure_sidebar_in_window(&window_id, None);
         }
