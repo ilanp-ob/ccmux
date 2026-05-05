@@ -128,9 +128,28 @@ pub struct App {
     /// Background branch-fetch thread for the worktree flow.
     pub fetch_handle: Option<std::thread::JoinHandle<anyhow::Result<Vec<crate::git::BranchEntry>>>>,
     pub fetch_repo_root: Option<String>,
+    /// Background dir-scan thread for the folder picker.
+    pub folder_scan_handle: Option<std::thread::JoinHandle<Vec<std::path::PathBuf>>>,
+    pub folder_scan_root: Option<std::path::PathBuf>,
     last_nav_hint_tick: Instant,
     pub global_info: GlobalInfo,
     last_global_info_tick: Instant,
+}
+
+fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            if path.file_name()
+                .map(|n| n.to_string_lossy().starts_with('.'))
+                .unwrap_or(true) { continue; }
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    dirs
 }
 
 impl App {
@@ -180,6 +199,8 @@ impl App {
             last_entered_idx: None,
             fetch_handle: None,
             fetch_repo_root: None,
+            folder_scan_handle: None,
+            folder_scan_root: None,
             last_nav_hint_tick: Instant::now(),
             global_info: GlobalInfo::load(),
             last_global_info_tick: Instant::now(),
@@ -363,7 +384,7 @@ impl App {
         if window_id != own_window {
             let _ = tmux.select_window(&window_id);
             // Auto-open a sidebar in the target window so the user sees it immediately.
-            self.ensure_sidebar_in_window(&window_id, &pane_id);
+            self.ensure_sidebar_in_window(&window_id, Some(&pane_id));
         }
         // Always land on the Claude pane (split-window steals focus, so this re-focuses it).
         let _ = tmux.select_pane(&pane_id);
@@ -371,7 +392,7 @@ impl App {
 
     /// Spawn a sidebar in `window_id` if one isn't already there.
     /// Re-selects `claude_pane_id` afterwards since split-window steals focus.
-    fn ensure_sidebar_in_window(&self, window_id: &str, claude_pane_id: &str) {
+    fn ensure_sidebar_in_window(&self, window_id: &str, claude_pane_id: Option<&str>) {
         let tmux = Tmux::new(self.managed_server.clone());
         let var_key = format!("@ccmux_sidebar_{}_{}", self.managed_session, window_id);
         let hint_key = format!("@ccmux_nav_{}_{}", self.managed_session, window_id);
@@ -379,7 +400,9 @@ impl App {
         // Already open? Signal it to select the correct pane and return.
         if let Some(pane_id) = tmux.get_var(&var_key) {
             if tmux.pane_exists(&pane_id) {
-                let _ = tmux.set_var(&hint_key, claude_pane_id);
+                if let Some(cpid) = claude_pane_id {
+                    let _ = tmux.set_var(&hint_key, cpid);
+                }
                 return;
             }
             let _ = tmux.del_var(&var_key);
@@ -396,10 +419,12 @@ impl App {
         if let Ok(new_pane) = tmux.split_sidebar(window_id, self.config.sidebar.width, &sidebar_cmd) {
             if !new_pane.is_empty() {
                 let _ = tmux.set_var(&var_key, &new_pane);
-                // Tell the new sidebar which Claude pane to pre-select.
-                let _ = tmux.set_var(&hint_key, claude_pane_id);
-                // Return focus to the Claude pane — split_sidebar moved it to the new sidebar.
-                let _ = tmux.select_pane(claude_pane_id);
+                if let Some(cpid) = claude_pane_id {
+                    // Tell the new sidebar which Claude pane to pre-select.
+                    let _ = tmux.set_var(&hint_key, cpid);
+                }
+                // Return focus to the Claude pane (or stay on sidebar if None).
+                let _ = tmux.select_pane(claude_pane_id.unwrap_or(&new_pane));
             }
         }
     }
@@ -525,6 +550,69 @@ impl App {
         true
     }
 
+    pub fn start_folder_pick(&mut self) {
+        use crate::sidebar::mode::FolderPickStep;
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dev = std::path::PathBuf::from(&home).join("dev");
+        let root = if dev.is_dir() { dev } else { std::path::PathBuf::from(&home) };
+        let root_clone = root.clone();
+        self.folder_scan_root = Some(root);
+        self.folder_scan_handle = Some(std::thread::spawn(move || scan_dirs(&root_clone)));
+        self.mode = Mode::FolderPick(FolderPickStep::Scanning);
+    }
+
+    pub fn tick_folder_pick(&mut self) -> bool {
+        use crate::sidebar::mode::FolderPickStep;
+        let done = self.folder_scan_handle.as_ref().map(|h| h.is_finished()).unwrap_or(false);
+        if !done { return false; }
+        let handle = self.folder_scan_handle.take().unwrap();
+        let dirs = handle.join().unwrap_or_default();
+        let root = self.folder_scan_root.take().unwrap_or_default();
+        self.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: String::new(), cursor: 0 });
+        true
+    }
+
+    pub fn navigate_folder_into(&mut self, path: std::path::PathBuf) {
+        use crate::sidebar::mode::FolderPickStep;
+        self.folder_scan_root = Some(path.clone());
+        self.folder_scan_handle = Some(std::thread::spawn(move || scan_dirs(&path)));
+        self.mode = Mode::FolderPick(FolderPickStep::Scanning);
+    }
+
+    pub fn navigate_folder_up(&mut self) {
+        use crate::sidebar::mode::FolderPickStep;
+        if let Mode::FolderPick(FolderPickStep::Picking { ref root, .. }) = self.mode.clone() {
+            if let Some(parent) = root.parent() {
+                let parent = parent.to_path_buf();
+                self.folder_scan_root = Some(parent.clone());
+                self.folder_scan_handle = Some(std::thread::spawn(move || scan_dirs(&parent)));
+                self.mode = Mode::FolderPick(FolderPickStep::Scanning);
+            }
+        }
+    }
+
+    pub fn execute_folder_pick(&mut self, path: std::path::PathBuf) {
+        let tmux = Tmux::new(self.managed_server.clone());
+        let window_name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "new".to_string());
+        let window_id = match tmux.new_window(&self.managed_session, &window_name, &path) {
+            Ok(id) => id,
+            Err(e) => {
+                self.error = Some(format!("Window error: {}", e));
+                self.mode = Mode::Normal;
+                return;
+            }
+        };
+        let _ = tmux.send_keys(&window_id, &format!("claude --name '{}'", window_name));
+        if self.sticky {
+            self.ensure_sidebar_in_window(&window_id, None);
+        }
+        self.message = Some(format!("✓ Session created: {}", window_name));
+        self.mode = Mode::Normal;
+        let _ = self.refresh();
+    }
+
     /// Navigate to an already-existing worktree instead of creating a new one.
     /// Finds a tmux window with a pane inside `wt_path`; if none exists, opens a new window there.
     pub fn navigate_to_existing_worktree(&mut self, wt_path: &str) {
@@ -630,7 +718,10 @@ impl App {
                 if opts.launch_claude {
                     let model = AVAILABLE_MODELS[opts.model_idx];
                     let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {}", model, effort));
+                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
+                }
+                if self.sticky {
+                    self.ensure_sidebar_in_window(&wid, None);
                 }
                 self.mode = crate::sidebar::mode::Mode::Normal;
                 let _ = self.refresh();
@@ -697,7 +788,10 @@ impl App {
         if opts.launch_claude {
             let model = AVAILABLE_MODELS[opts.model_idx];
             let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-            let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {}", model, effort));
+            let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
+        }
+        if self.sticky {
+            self.ensure_sidebar_in_window(&window_id, None);
         }
 
         self.message = Some(format!("✓ Worktree ready: {}", folder));
@@ -765,7 +859,10 @@ impl App {
         }
 
         if launch_claude {
-            let _ = tmux.send_keys(&window_id, "claude");
+            let _ = tmux.send_keys(&window_id, &format!("claude --name '{}'", window_name));
+        }
+        if self.sticky {
+            self.ensure_sidebar_in_window(&window_id, None);
         }
 
         self.message = Some(format!("✓ Window created: {}", window_name));

@@ -68,6 +68,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::NewWindow { .. } => render_new_window_overlay(frame, app, inner),
         Mode::ActionMenu { .. } => render_action_menu_overlay(frame, app, inner),
         Mode::WorktreeFlow(_) => render_worktree_overlay(frame, app, inner),
+        Mode::FolderPick(_) => render_folder_pick_overlay(frame, app, inner),
         _ => {}
     }
 
@@ -679,6 +680,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             );
         }
         Mode::WorktreeFlow(_) => {}
+        Mode::FolderPick(_) => {}
     }
 }
 
@@ -1145,6 +1147,128 @@ fn render_options_overlay(frame: &mut Frame, area: Rect, opts: &crate::sidebar::
             .style(Style::default().bg(Color::Rgb(18, 20, 26))),
         overlay,
     );
+}
+
+fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::sidebar::mode::FolderPickStep;
+    use std::path::PathBuf;
+
+    let bg = Color::Rgb(22, 25, 34);
+    let border_clr = Color::Rgb(80, 100, 160);
+    let title_clr = Color::Rgb(140, 170, 220);
+    let sel_bg = Color::Rgb(45, 55, 80);
+    let dim_clr = Color::Rgb(100, 110, 130);
+    let git_clr = Color::Rgb(100, 200, 140);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_clr))
+        .title(Span::styled(" N  New Session ", Style::default().fg(title_clr)))
+        .style(Style::default().bg(bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    match &app.mode {
+        Mode::FolderPick(FolderPickStep::Scanning) => {
+            let line = Line::from(Span::styled(" Scanning…", Style::default().fg(dim_clr)));
+            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), inner);
+        }
+        Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor }) => {
+            let h = inner.height as usize;
+            if h < 3 { return; }
+
+            // Row 0: current root path
+            let root_str = shorten_path(root);
+            let root_line = Line::from(vec![
+                Span::styled(" ", Style::default().bg(bg)),
+                Span::styled(root_str, Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("/", Style::default().fg(border_clr).bg(bg)),
+            ]);
+
+            // Row 1: filter input
+            let filter_line = Line::from(vec![
+                Span::styled(" > ", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(filter.as_str(), Style::default().fg(Color::White).bg(bg)),
+                Span::styled("█", Style::default().fg(border_clr).bg(bg)),
+            ]);
+
+            let list_h = h.saturating_sub(3); // root + filter + hint
+            let filtered: Vec<&PathBuf> = dirs.iter()
+                .filter(|d| d.file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase().contains(&filter.to_lowercase()))
+                    .unwrap_or(false))
+                .collect();
+            let filtered_len = filtered.len();
+            let cursor = *cursor;
+            let clamped = if filtered_len == 0 { 0 } else { cursor.min(filtered_len - 1) };
+
+            // Scroll to keep cursor visible
+            let scroll = if clamped >= list_h { clamped + 1 - list_h } else { 0 };
+
+            let mut list_lines: Vec<Line> = Vec::new();
+            for (i, path) in filtered.iter().enumerate().skip(scroll).take(list_h) {
+                let name = path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let is_git = path.join(".git").exists();
+                let is_selected = i == clamped;
+
+                let (line_bg, name_style) = if is_selected {
+                    (sel_bg, Style::default().fg(Color::White).bg(sel_bg).add_modifier(Modifier::BOLD))
+                } else {
+                    (bg, Style::default().fg(Color::Rgb(200, 210, 230)).bg(bg))
+                };
+
+                let prefix = if is_git { "⎇ " } else { "  " };
+                let prefix_clr = if is_git { git_clr } else { dim_clr };
+
+                list_lines.push(Line::from(vec![
+                    Span::styled(" ", Style::default().bg(line_bg)),
+                    Span::styled(prefix, Style::default().fg(prefix_clr).bg(line_bg)),
+                    Span::styled(name, name_style),
+                ]));
+            }
+
+            // Pad remaining rows
+            while list_lines.len() < list_h {
+                list_lines.push(Line::from(Span::styled("", Style::default().bg(bg))));
+            }
+
+            // Hint row
+            let hint_line = Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":open  ", Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("→", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":into  ", Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("←", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":up  ", Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("Esc", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":cancel", Style::default().fg(dim_clr).bg(bg)),
+            ]);
+
+            // Layout: root_line, filter_line, list rows, hint
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+
+            frame.render_widget(Paragraph::new(root_line).style(Style::default().bg(bg)), chunks[0]);
+            frame.render_widget(Paragraph::new(filter_line).style(Style::default().bg(bg)), chunks[1]);
+            frame.render_widget(
+                Paragraph::new(list_lines).style(Style::default().bg(bg)),
+                chunks[2],
+            );
+            frame.render_widget(Paragraph::new(hint_line).style(Style::default().bg(bg)), chunks[3]);
+        }
+        _ => {}
+    }
 }
 
 fn status_color(status: &ClaudeCodeStatus) -> Color {

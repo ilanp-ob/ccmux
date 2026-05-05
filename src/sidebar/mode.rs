@@ -21,6 +21,8 @@ pub enum Mode {
     WorktreeFlow(WorktreeStep),
     /// Action menu for the selected pane (PR ops, delete worktree, …)
     ActionMenu { items: Vec<ActionItem>, cursor: usize },
+    /// Folder picker for creating a new session in a chosen directory
+    FolderPick(FolderPickStep),
 }
 
 // ─── Worktree flow ────────────────────────────────────────────────────────────
@@ -78,6 +80,21 @@ impl Default for WorktreeOpts {
             field: 0,
         }
     }
+}
+
+// ─── Folder pick flow ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderPickStep {
+    /// Background directory scan in progress
+    Scanning,
+    /// Directory list ready; user is filtering
+    Picking {
+        root: std::path::PathBuf,
+        dirs: Vec<std::path::PathBuf>,
+        filter: String,
+        cursor: usize,
+    },
 }
 
 // ─── Action menu ─────────────────────────────────────────────────────────────

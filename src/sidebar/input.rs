@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use super::{App, Mode};
-use super::mode::WorktreeStep;
+use super::mode::{WorktreeStep, FolderPickStep};
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     // Don't clear messages while composing — let the user see what they're doing
@@ -18,6 +18,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::NewWindow { .. } => handle_new_window(app, key),
         Mode::WorktreeFlow(_) => handle_worktree(app, key),
         Mode::ActionMenu { .. } => handle_action_menu(app, key),
+        Mode::FolderPick(_) => handle_folder_pick(app, key),
     }
 }
 
@@ -77,6 +78,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
                 launch_claude: true,
                 field: 0,
             };
+        }
+        KeyCode::Char('N') => {
+            app.start_folder_pick();
         }
         KeyCode::Char('w') => {
             app.start_worktree_flow();
@@ -548,6 +552,86 @@ fn handle_worktree_options(
             app.mode = back!();
         }
         _ => {}
+    }
+}
+
+fn handle_folder_pick(app: &mut App, key: KeyEvent) {
+    use std::path::PathBuf;
+
+    let step = match &app.mode {
+        Mode::FolderPick(s) => s.clone(),
+        _ => return,
+    };
+
+    match step {
+        FolderPickStep::Scanning => {
+            if key.code == KeyCode::Esc {
+                app.mode = Mode::Normal;
+                app.folder_scan_handle = None;
+                app.folder_scan_root = None;
+            }
+        }
+        FolderPickStep::Picking { root, dirs, filter, cursor } => {
+            let filtered: Vec<&PathBuf> = dirs.iter()
+                .filter(|d| d.file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase().contains(&filter.to_lowercase()))
+                    .unwrap_or(false))
+                .collect();
+            let filtered_len = filtered.len();
+            let clamped = if filtered_len == 0 { 0 } else { cursor.min(filtered_len - 1) };
+
+            match key.code {
+                KeyCode::Esc => { app.mode = Mode::Normal; }
+
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let new_cursor = if cursor == 0 { filtered_len.saturating_sub(1) } else { cursor - 1 };
+                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor: new_cursor });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let new_cursor = if filtered_len == 0 { 0 } else { (cursor + 1) % filtered_len };
+                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor: new_cursor });
+                }
+                KeyCode::Enter => {
+                    if let Some(path) = filtered.get(clamped) {
+                        app.execute_folder_pick((*path).clone());
+                    }
+                }
+                KeyCode::Right if !filtered.is_empty() => {
+                    if let Some(path) = filtered.get(clamped) {
+                        app.navigate_folder_into((*path).clone());
+                    }
+                }
+                KeyCode::Left => {
+                    app.navigate_folder_up();
+                }
+                KeyCode::Backspace if filter.is_empty() => {
+                    app.navigate_folder_up();
+                }
+                KeyCode::Backspace => {
+                    let mut f = filter;
+                    f.pop();
+                    let new_len = dirs.iter()
+                        .filter(|d| d.file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase().contains(&f.to_lowercase()))
+                            .unwrap_or(false))
+                        .count();
+                    let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
+                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: f, cursor: new_cursor });
+                }
+                KeyCode::Char(c) => {
+                    let mut f = filter;
+                    f.push(c);
+                    let new_len = dirs.iter()
+                        .filter(|d| d.file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase().contains(&f.to_lowercase()))
+                            .unwrap_or(false))
+                        .count();
+                    let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len.saturating_sub(1)) };
+                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: f, cursor: new_cursor });
+                }
+                _ => {}
+            }
+        }
     }
 }
 

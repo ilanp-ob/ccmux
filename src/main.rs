@@ -309,6 +309,10 @@ fn run_sidebar_loop(
             needs_redraw = true;
         }
 
+        if app.tick_folder_pick() {
+            needs_redraw = true;
+        }
+
         if app.tick_nav_hint() {
             needs_redraw = true;
         }
