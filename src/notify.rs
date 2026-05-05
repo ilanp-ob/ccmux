@@ -90,13 +90,51 @@ pub fn run(server: Option<String>) {
 }
 
 fn fire_notification(window_name: &str) {
-    let script = format!(
-        "display notification {:?} with title \"ccmux\" subtitle \"Done — ready for input\"",
-        window_name
-    );
-    let _ = std::process::Command::new("osascript")
-        .args(["-e", &script])
-        .status();
+    // Try terminal-notifier first (has its own macOS notification permission).
+    // Fall back to osascript if not installed.
+    let tn = which_terminal_notifier();
+    if let Some(bin) = tn {
+        let _ = std::process::Command::new(bin)
+            .args([
+                "-title", "ccmux",
+                "-subtitle", "Done — ready for input",
+                "-message", window_name,
+                "-group", "ccmux",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    } else {
+        let script = format!(
+            "display notification {:?} with title \"ccmux\" subtitle \"Done — ready for input\"",
+            window_name
+        );
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .status();
+    }
+}
+
+fn which_terminal_notifier() -> Option<String> {
+    for candidate in &[
+        "/opt/homebrew/bin/terminal-notifier",
+        "/usr/local/bin/terminal-notifier",
+    ] {
+        if std::path::Path::new(candidate).exists() {
+            return Some(candidate.to_string());
+        }
+    }
+    // Also try PATH
+    if std::process::Command::new("which")
+        .arg("terminal-notifier")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return Some("terminal-notifier".to_string());
+    }
+    None
 }
 
 fn set_alert(tmux: &Tmux, window_id: &str, on: bool) {
