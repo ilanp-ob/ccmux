@@ -24,7 +24,7 @@ pub fn run(server: Option<String>) {
 
         let Ok(out) = tmux.cmd()
             .args(["list-panes", "-aF",
-                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{pane_active}\t#{window_active}\t#{session_name}"])
+                   "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{pane_active}\t#{session_name}"])
             .output()
         else {
             std::thread::sleep(Duration::from_secs(2));
@@ -32,11 +32,11 @@ pub fn run(server: Option<String>) {
         };
 
         for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let parts: Vec<&str> = line.splitn(6, '\t').collect();
-            if parts.len() < 6 { continue; }
+            let parts: Vec<&str> = line.splitn(5, '\t').collect();
+            if parts.len() < 5 { continue; }
 
-            let (pane_id, command, window_id, pane_active, window_active, _session) =
-                (parts[0], parts[1], parts[2], parts[3] == "1", parts[4] == "1", parts[5]);
+            let (pane_id, command, window_id, pane_active, _session) =
+                (parts[0], parts[1], parts[2], parts[3] == "1", parts[4]);
 
             if !command.contains("claude") && !command.contains("ocli") { continue; }
 
@@ -66,10 +66,7 @@ pub fn run(server: Option<String>) {
             let now_needs_attention = matches!(new_status,
                 ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
 
-            // Fire when user isn't actively watching Claude:
-            // !pane_active → user is in a different pane (e.g. ccmux sidebar in same window)
-            // !window_active → user switched to a different window or closed the terminal
-            if was_busy && now_needs_attention && (!pane_active || !window_active) {
+            if was_busy && now_needs_attention {
                 let window_name = tmux.cmd()
                     .args(["display-message", "-t", pane_id, "-p", "#{window_name}"])
                     .output()
@@ -80,8 +77,8 @@ pub fn run(server: Option<String>) {
                 set_alert(&tmux, window_id, true);
             }
 
-            // Clear alert only when user is actually looking at the Claude pane.
-            if pane_active && window_active {
+            // Clear alert when user focuses the Claude pane directly.
+            if pane_active {
                 set_alert(&tmux, window_id, false);
             }
 
