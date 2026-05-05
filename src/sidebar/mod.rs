@@ -18,13 +18,14 @@ use crate::tmux::Tmux;
 pub struct GlobalInfo {
     pub usage_5h: Option<f32>,
     pub usage_7d: Option<f32>,
-    pub reset_5h_left: Option<String>,
-    pub reset_7d_left: Option<String>,
+    /// Unix epoch secs — formatted at render time so display is always current.
+    pub reset_5h_at: Option<i64>,
+    pub reset_7d_at: Option<i64>,
     pub mp_drawers: Option<String>,
     pub mp_size: Option<String>,
     pub mp_wings: Option<u32>,
     pub mp_rooms: Option<u32>,
-    pub mp_ago: Option<String>,
+    pub mp_last_at: Option<i64>,
 }
 
 impl GlobalInfo {
@@ -34,13 +35,7 @@ impl GlobalInfo {
 
     /// Read from ~/.cache/cc-usage.json and ~/.cache/cc-mempalace.json (written by statusline).
     pub fn load() -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
         let mut info = GlobalInfo::default();
-
         let home = std::env::var("HOME").unwrap_or_else(|_| String::from("~"));
         let cache = std::path::Path::new(&home).join(".cache");
 
@@ -48,12 +43,8 @@ impl GlobalInfo {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
                 info.usage_5h = v["five_hour"]["utilization"].as_f64().map(|x| x as f32);
                 info.usage_7d = v["seven_day"]["utilization"].as_f64().map(|x| x as f32);
-                if let Some(ts) = v["five_hour"]["resets_at"].as_str() {
-                    info.reset_5h_left = format_time_remaining(ts, now);
-                }
-                if let Some(ts) = v["seven_day"]["resets_at"].as_str() {
-                    info.reset_7d_left = format_time_remaining(ts, now);
-                }
+                info.reset_5h_at = v["five_hour"]["resets_at"].as_str().and_then(utc_to_epoch);
+                info.reset_7d_at = v["seven_day"]["resets_at"].as_str().and_then(utc_to_epoch);
             }
         }
 
@@ -69,9 +60,7 @@ impl GlobalInfo {
                 info.mp_size = v["size"].as_str().map(String::from);
                 info.mp_wings = v["wings"].as_u64().map(|x| x as u32);
                 info.mp_rooms = v["rooms"].as_u64().map(|x| x as u32);
-                if let Some(ts) = v["last"].as_str() {
-                    info.mp_ago = format_time_ago(ts, now);
-                }
+                info.mp_last_at = v["last"].as_str().and_then(utc_to_epoch);
             }
         }
 
@@ -80,7 +69,7 @@ impl GlobalInfo {
 }
 
 /// Parse "YYYY-MM-DDTHH:MM:SS..." (UTC) to Unix epoch seconds using Julian Day formula.
-fn utc_to_epoch(ts: &str) -> Option<i64> {
+pub(super) fn utc_to_epoch(ts: &str) -> Option<i64> {
     let b = ts.as_bytes();
     if b.len() < 19 { return None; }
     let s = std::str::from_utf8(&b[..19]).ok()?;
@@ -96,25 +85,6 @@ fn utc_to_epoch(ts: &str) -> Option<i64> {
             + (30.6001_f64 * (mo + 1) as f64) as i64
             + d + (2 - a + a / 4) - 1524;
     Some((jdn - 2_440_588) * 86400 + h * 3600 + mi * 60 + sec)
-}
-
-fn format_time_remaining(ts: &str, now: i64) -> Option<String> {
-    let target = utc_to_epoch(ts)?;
-    let rem = (target - now).max(0);
-    let h = rem / 3600;
-    let m = (rem % 3600) / 60;
-    Some(if h > 0 { format!("{}h{}m", h, m) } else { format!("{}m", m) })
-}
-
-fn format_time_ago(ts: &str, now: i64) -> Option<String> {
-    let target = utc_to_epoch(ts)?;
-    let diff = (now - target).max(0);
-    Some(match diff {
-        d if d >= 86400 => format!("{}d ago", d / 86400),
-        d if d >= 3600  => format!("{}h ago", d / 3600),
-        d if d >= 60    => format!("{}m ago", d / 60),
-        _               => "just now".into(),
-    })
 }
 
 pub struct App {

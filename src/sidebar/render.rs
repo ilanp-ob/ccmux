@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => 2,
         _ => 1,
     };
-    let info_h: u16 = if app.global_info.has_data() { 2 } else { 0 };
+    let info_h: u16 = if app.global_info.has_data() { 3 } else { 0 }; // separator + 2 data rows
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -163,8 +163,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     let area_h = area.height as usize;
     let area_w = area.width as usize;
     let sel = app.selected;
+    let inner_w = area_w.saturating_sub(2);
 
-    // Auto-scroll: keep selected item in view (rough 4-line estimate per item).
+    // Auto-scroll: keep selected item in view.
     let per_screen = (area_h / 4).max(1);
     if sel < app.scroll_offset {
         app.scroll_offset = sel;
@@ -172,48 +173,54 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         app.scroll_offset = sel + 1 - per_screen;
     }
     let scroll = app.scroll_offset;
-
     let own_window = app.own_window_id.clone().unwrap_or_default();
-    let inner_w = area_w.saturating_sub(2); // after 2-char prefix
 
-    let mut lines: Vec<Line> = Vec::new();
-    let mut click_rows: Vec<(u16, usize)> = Vec::new();
-    let mut flat_idx = 0usize;
-    let mut rows_used = 0usize;
+    // ── Phase 1: collect visible entries at minimum heights ───────────────────
+    // We pre-collect owned data so we can compute spare space before rendering,
+    // then expand non-selected items into the spare rows if content is available.
 
-    if scroll > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  ↑ {} above", scroll),
-            Style::default().fg(Color::DarkGray).bg(sidebar_bg),
-        )));
-        rows_used += 1;
+    struct RenderItem {
+        pane_id: String,
+        pane_idx: usize,
+        window_id: String,
+        status: ClaudeCodeStatus,
+        is_sel: bool,
+        is_cur: bool,
+        name: String,
+        num_str: String,
+        branch: String,
+        path_short: String,
+        preview: Vec<String>, // populated for selected; may get 1 line added for others
     }
+    enum Entry { Header(String), Item(RenderItem) }
 
-    'outer: for group in &app.groups {
-        if group.panes.len() > 1 || group.server.is_some() {
-            let win_idx = group.panes.first().map(|p| p.window_index.as_str()).unwrap_or("?");
-            let server_label = group.server.as_deref()
-                .map(|s| format!(" [{}]", s))
-                .unwrap_or_default();
-            if flat_idx >= scroll {
-                lines.push(Line::from(Span::styled(
-                    format!("  win {}{}", win_idx, server_label),
-                    Style::default().fg(Color::DarkGray).bg(sidebar_bg),
-                )));
-                rows_used += 1;
-            }
-        }
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut rows_used: usize = if scroll > 0 { 1 } else { 0 };
+    let mut flat_idx = 0usize;
+
+    'collect: for group in &app.groups {
+        let show_hdr = group.panes.len() > 1 || group.server.is_some();
+        let mut hdr_pushed = false;
 
         for pane in &group.panes {
             let pane_idx = flat_idx;
             flat_idx += 1;
-
             if pane_idx < scroll { continue; }
 
-            let is_sel = pane_idx == sel;
+            if show_hdr && !hdr_pushed {
+                if rows_used >= area_h { break 'collect; }
+                let win_idx = group.panes.first().map(|p| p.window_index.as_str()).unwrap_or("?");
+                let srv = group.server.as_deref()
+                    .map(|s| format!(" [{}]", s)).unwrap_or_default();
+                entries.push(Entry::Header(format!("  win {}{}", win_idx, srv)));
+                rows_used += 1;
+                hdr_pushed = true;
+            }
 
-            // Gather preview lines now (before mutable borrow of app)
-            let preview_lines: Vec<String> = if is_sel {
+            let is_sel = pane_idx == sel;
+            let is_cur = pane.window_id == own_window;
+
+            let preview: Vec<String> = if is_sel {
                 app.pane_content_cache.get(&pane.pane_id)
                     .map(|c| extract_preview_lines(c, inner_w.saturating_sub(1), 6))
                     .unwrap_or_default()
@@ -221,170 +228,208 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 Vec::new()
             };
 
-            let item_h = 3 + if is_sel { preview_lines.len().max(1) } else { 0 };
-            // +1 for the separator line between items
-            let total_item_h = item_h + 1;
-
-            if rows_used + total_item_h > area_h { break 'outer; }
-
-            let is_cur = pane.window_id == own_window;
-            let sc = status_color(&pane.status);
-            let icon = pane.status.icon();
+            // min height: 3 content rows + 1 separator + preview for selected
+            let min_h = 3 + 1 + if is_sel { preview.len().max(1) } else { 0 };
+            if rows_used + min_h > area_h { break 'collect; }
+            rows_used += min_h;
 
             let branch = pane.git_branch().unwrap_or_else(|| "?".to_string());
             let name = pane_display_name(pane);
             let num_str = format!("%{}", pane.display_num);
-            let name_max = inner_w.saturating_sub(4 + num_str.len());
-            let name_short = truncate(&name, name_max);
+            let name_short = truncate(&name, inner_w.saturating_sub(4 + num_str.len()));
             let branch_short = truncate(&branch, inner_w.saturating_sub(1));
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
 
-            click_rows.push((area.y + lines.len() as u16, pane_idx));
+            entries.push(Entry::Item(RenderItem {
+                pane_id: pane.pane_id.clone(),
+                pane_idx,
+                window_id: pane.window_id.clone(),
+                status: pane.status.clone(),
+                is_sel, is_cur,
+                name: name_short,
+                num_str,
+                branch: branch_short,
+                path_short,
+                preview,
+            }));
+        }
+    }
 
-            let row_bg: Color = if is_sel { SEL_BG }
-                else if pane_idx % 2 == 0 { ALT_BG }
-                else { sidebar_bg };
-
-            let sp = |fg: Color| Style::default().fg(fg).bg(row_bg);
-            let base = Style::default().bg(row_bg);
-
-            // ── 2-char prefix ─────────────────────────────────────────────────
-            let win_span = if is_cur {
-                Span::styled("▶", sp(Color::Cyan))
-            } else {
-                Span::styled(" ", base)
-            };
-            let sel_span = if is_sel {
-                Span::styled("▌", sp(sc))
-            } else if pane.status == ClaudeCodeStatus::WaitingInput {
-                Span::styled("▌", sp(Color::Yellow))
-            } else {
-                Span::styled(" ", base)
-            };
-
-            let name_fg = if !is_sel && pane.status == ClaudeCodeStatus::WaitingInput {
-                Color::Yellow
-            } else {
-                Color::White
-            };
-            let name_mod = if is_sel || is_cur { Modifier::BOLD } else { Modifier::empty() };
-
-            // Right-align %N — use chars().count() because icons like ● are 3 bytes but 1 column.
-            let left_len = 2 + 1 + icon.chars().count() + 1 + name_short.chars().count();
-            let pad = area_w.saturating_sub(left_len + num_str.len());
-
-            // ── Line 1: [W][S] icon name ··· %N ──────────────────────────────
-            // Trailing fill ensures row_bg covers the full width (ratatui clips at area.width).
-            lines.push(Line::from(vec![
-                win_span, sel_span,
-                Span::styled(format!(" {} ", icon), sp(sc)),
-                Span::styled(
-                    name_short.clone(),
-                    Style::default().fg(name_fg).add_modifier(name_mod).bg(row_bg),
-                ),
-                Span::styled(" ".repeat(pad), base),
-                Span::styled(num_str, sp(Color::Rgb(70, 70, 70))),
-                Span::styled(" ".repeat(area_w), base),
-            ]).style(base));
-
-            // Helper: pipe span on continuation lines (same position as sel_span on line 1).
-            // For selected items the pipe extends the full block height.
-            // For waiting-input items it also extends to signal attention.
-            let cont_pipe: Option<Span> = if is_sel {
-                Some(Span::styled("▌", sp(sc)))
-            } else if pane.status == ClaudeCodeStatus::WaitingInput {
-                Some(Span::styled("▌", sp(Color::Yellow)))
-            } else {
-                None
-            };
-
-            // Trailing fill — pads the line to the full area width so the row_bg
-            // covers every cell. Ratatui clips at area.width so over-filling is safe.
-            let fill = || Span::styled(" ".repeat(area_w), base);
-
-            // ── Line 2: branch ────────────────────────────────────────────────
-            if let Some(ref pipe) = cont_pipe {
-                lines.push(Line::from(vec![
-                    Span::styled(" ", base),
-                    pipe.clone(),
-                    Span::styled(
-                        format!(" {}", branch_short),
-                        sp(if is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) }),
-                    ),
-                    fill(),
-                ]).style(base));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("   {}", branch_short), sp(Color::Rgb(80, 90, 110))),
-                    fill(),
-                ]).style(base));
+    // ── Phase 2: expand non-selected items into spare rows ────────────────────
+    let mut spare = area_h.saturating_sub(rows_used);
+    if spare > 0 {
+        for entry in &mut entries {
+            if spare == 0 { break; }
+            if let Entry::Item(ref mut item) = entry {
+                if !item.is_sel && item.preview.is_empty() {
+                    let p = app.pane_content_cache.get(&item.pane_id)
+                        .and_then(|c| {
+                            let v = extract_preview_lines(c, inner_w.saturating_sub(1), 1);
+                            if v.is_empty() { None } else { Some(v) }
+                        });
+                    if let Some(lines) = p {
+                        item.preview = lines;
+                        spare -= 1;
+                    }
+                }
             }
+        }
+    }
 
-            // ── Line 3: path + status (selected) or path alone ───────────────
-            if is_sel {
-                let status_label = match &pane.status {
-                    ClaudeCodeStatus::Working => "● Working",
-                    ClaudeCodeStatus::WaitingInput => "⚠ Waiting",
-                    ClaudeCodeStatus::Idle => "○ Idle",
-                    ClaudeCodeStatus::Unknown => "○ Unknown",
+    // ── Phase 3: render ───────────────────────────────────────────────────────
+    let mut lines: Vec<Line> = Vec::new();
+    let mut click_rows: Vec<(u16, usize)> = Vec::new();
+
+    if scroll > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  ↑ {} above", scroll),
+            Style::default().fg(Color::DarkGray).bg(sidebar_bg),
+        )));
+    }
+
+    for entry in &entries {
+        match entry {
+            Entry::Header(label) => {
+                lines.push(Line::from(Span::styled(
+                    label.clone(),
+                    Style::default().fg(Color::DarkGray).bg(sidebar_bg),
+                )));
+            }
+            Entry::Item(item) => {
+                let sc = status_color(&item.status);
+                let icon = item.status.icon();
+                let row_bg: Color = if item.is_sel { SEL_BG }
+                    else if item.pane_idx % 2 == 0 { ALT_BG }
+                    else { sidebar_bg };
+
+                let sp = |fg: Color| Style::default().fg(fg).bg(row_bg);
+                let base = Style::default().bg(row_bg);
+                let fill = || Span::styled(" ".repeat(area_w), base);
+
+                let win_span = if item.is_cur {
+                    Span::styled("▶", sp(Color::Cyan))
+                } else {
+                    Span::styled(" ", base)
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(" ", base),
-                    Span::styled("▌", sp(sc)),
-                    Span::styled(format!(" {}  ", path_short), sp(Color::DarkGray)),
-                    Span::styled(status_label, sp(sc)),
-                    fill(),
-                ]).style(base));
-            } else if pane.status == ClaudeCodeStatus::WaitingInput {
-                lines.push(Line::from(vec![
-                    Span::styled(" ", base),
-                    Span::styled("▌", sp(Color::Yellow)),
-                    Span::styled(format!(" {}", path_short), sp(Color::Rgb(55, 58, 68))),
-                    fill(),
-                ]).style(base));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("   {}", path_short), sp(Color::Rgb(55, 58, 68))),
-                    fill(),
-                ]).style(base));
-            }
+                let sel_span = if item.is_sel {
+                    Span::styled("▌", sp(sc))
+                } else if item.status == ClaudeCodeStatus::WaitingInput {
+                    Span::styled("▌", sp(Color::Yellow))
+                } else {
+                    Span::styled(" ", base)
+                };
+                let name_fg = if !item.is_sel && item.status == ClaudeCodeStatus::WaitingInput {
+                    Color::Yellow
+                } else {
+                    Color::White
+                };
+                let name_mod = if item.is_sel || item.is_cur { Modifier::BOLD } else { Modifier::empty() };
+                let left_len = 2 + 1 + icon.chars().count() + 1 + item.name.chars().count();
+                let pad = area_w.saturating_sub(left_len + item.num_str.len());
 
-            // ── Lines 4+: content preview (selected only) ────────────────────
-            if is_sel {
-                if preview_lines.is_empty() {
+                click_rows.push((area.y + lines.len() as u16, item.pane_idx));
+
+                // ── Line 1: [W][S] icon name ··· %N ──────────────────────────
+                lines.push(Line::from(vec![
+                    win_span, sel_span,
+                    Span::styled(format!(" {} ", icon), sp(sc)),
+                    Span::styled(item.name.clone(),
+                        Style::default().fg(name_fg).add_modifier(name_mod).bg(row_bg)),
+                    Span::styled(" ".repeat(pad), base),
+                    Span::styled(item.num_str.clone(), sp(Color::Rgb(70, 70, 70))),
+                    fill(),
+                ]).style(base));
+
+                let cont_pipe: Option<Span> = if item.is_sel {
+                    Some(Span::styled("▌", sp(sc)))
+                } else if item.status == ClaudeCodeStatus::WaitingInput {
+                    Some(Span::styled("▌", sp(Color::Yellow)))
+                } else {
+                    None
+                };
+
+                // ── Line 2: branch ────────────────────────────────────────────
+                if let Some(ref pipe) = cont_pipe {
                     lines.push(Line::from(vec![
-                        Span::styled(" ", base),
-                        Span::styled("▌", sp(sc)),
-                        Span::styled(" —", sp(Color::Rgb(70, 72, 85))),
+                        Span::styled(" ", base), pipe.clone(),
+                        Span::styled(format!(" {}", item.branch),
+                            sp(if item.is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })),
                         fill(),
                     ]).style(base));
                 } else {
-                    for pl in &preview_lines {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("   {}", item.branch), sp(Color::Rgb(80, 90, 110))),
+                        fill(),
+                    ]).style(base));
+                }
+
+                // ── Line 3: path + status ─────────────────────────────────────
+                if item.is_sel {
+                    let status_label = match &item.status {
+                        ClaudeCodeStatus::Working => "● Working",
+                        ClaudeCodeStatus::WaitingInput => "⚠ Waiting",
+                        ClaudeCodeStatus::Idle => "○ Idle",
+                        ClaudeCodeStatus::Unknown => "○ Unknown",
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(" ", base), Span::styled("▌", sp(sc)),
+                        Span::styled(format!(" {}  ", item.path_short), sp(Color::DarkGray)),
+                        Span::styled(status_label, sp(sc)),
+                        fill(),
+                    ]).style(base));
+                } else if item.status == ClaudeCodeStatus::WaitingInput {
+                    lines.push(Line::from(vec![
+                        Span::styled(" ", base), Span::styled("▌", sp(Color::Yellow)),
+                        Span::styled(format!(" {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        fill(),
+                    ]).style(base));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("   {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        fill(),
+                    ]).style(base));
+                }
+
+                // ── Lines 4+: content preview ─────────────────────────────────
+                if item.preview.is_empty() {
+                    if item.is_sel {
                         lines.push(Line::from(vec![
-                            Span::styled(" ", base),
-                            Span::styled("▌", sp(sc)),
+                            Span::styled(" ", base), Span::styled("▌", sp(sc)),
+                            Span::styled(" —", sp(Color::Rgb(70, 72, 85))),
+                            fill(),
+                        ]).style(base));
+                    }
+                } else if item.is_sel {
+                    for pl in &item.preview {
+                        lines.push(Line::from(vec![
+                            Span::styled(" ", base), Span::styled("▌", sp(sc)),
                             Span::styled(format!(" {}", pl), sp(Color::Rgb(140, 145, 165))),
                             fill(),
                         ]).style(base));
                     }
+                } else {
+                    // Expanded non-selected: 1 dim preview line, no pipe
+                    for pl in &item.preview {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("   {}", pl), sp(Color::Rgb(75, 80, 100))),
+                            fill(),
+                        ]).style(base));
+                    }
                 }
+
+                // ── Separator ─────────────────────────────────────────────────
+                lines.push(Line::from(Span::styled(
+                    " ".repeat(area_w),
+                    Style::default().bg(sidebar_bg),
+                )));
             }
-
-            // ── Separator between items ───────────────────────────────────────
-            lines.push(Line::from(Span::styled(
-                " ".repeat(area_w),
-                Style::default().bg(sidebar_bg),
-            )));
-
-            rows_used += total_item_h;
         }
     }
 
     if flat_idx < total_items {
-        let remaining = total_items - flat_idx;
         lines.push(Line::from(Span::styled(
-            format!("  ↓ {} below", remaining),
+            format!("  ↓ {} below", total_items - flat_idx),
             Style::default().fg(Color::DarkGray).bg(sidebar_bg),
         )));
     }
@@ -408,70 +453,96 @@ fn sep() -> Span<'static> {
     Span::raw("  ")
 }
 
+const INFO_BG: Color = Color::Rgb(16, 18, 24);
+
 fn usage_color(pct: f32) -> Color {
     if pct >= 80.0 { Color::Rgb(255, 100, 80) }
     else if pct >= 50.0 { Color::Rgb(255, 220, 80) }
     else { Color::Rgb(150, 220, 150) }
 }
 
+fn fmt_time_left(target_epoch: i64, now: i64) -> String {
+    let rem = (target_epoch - now).max(0);
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    if h > 0 { format!("{}h{}m", h, m) } else { format!("{}m", m) }
+}
+
+fn fmt_time_ago(source_epoch: i64, now: i64) -> String {
+    let diff = (now - source_epoch).max(0);
+    match diff {
+        d if d >= 86400 => format!("{}d ago", d / 86400),
+        d if d >= 3600  => format!("{}h ago", d / 3600),
+        d if d >= 60    => format!("{}m ago", d / 60),
+        _               => "just now".into(),
+    }
+}
+
 fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
     let gi = &app.global_info;
+    let info_style = Style::default().bg(INFO_BG);
+    let dim = |fg: Color| Style::default().fg(fg).bg(INFO_BG);
 
-    // Line 1: usage
-    let mut usage_spans: Vec<Span> = Vec::new();
+    // Compute current time once for countdown/age calculations.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    // Row 0: separator
+    let sep_line = Line::from(Span::styled(
+        "─".repeat(area.width as usize),
+        dim(Color::Rgb(45, 48, 58)),
+    ));
+
+    // Row 1: usage percentages with live reset countdowns
+    let mut usage_spans = vec![Span::styled(" ", info_style)];
     if let Some(u5) = gi.usage_5h {
         let clr = usage_color(u5);
-        let label = format!("5h:{:.0}%", u5);
-        usage_spans.push(Span::styled(label, Style::default().fg(clr)));
-        if let Some(left) = &gi.reset_5h_left {
+        usage_spans.push(Span::styled(format!("5h:{:.0}%", u5), dim(clr)));
+        if let Some(at) = gi.reset_5h_at {
             usage_spans.push(Span::styled(
-                format!("({})", left),
-                Style::default().fg(Color::DarkGray),
+                format!("({})", fmt_time_left(at, now)),
+                dim(Color::Rgb(80, 85, 100)),
             ));
         }
     }
     if let Some(u7) = gi.usage_7d {
-        if !usage_spans.is_empty() {
-            usage_spans.push(Span::raw("  "));
-        }
+        if usage_spans.len() > 1 { usage_spans.push(Span::raw("  ")); }
         let clr = usage_color(u7);
-        let label = format!("7d:{:.0}%", u7);
-        usage_spans.push(Span::styled(label, Style::default().fg(clr)));
-        if let Some(left) = &gi.reset_7d_left {
+        usage_spans.push(Span::styled(format!("7d:{:.0}%", u7), dim(clr)));
+        if let Some(at) = gi.reset_7d_at {
             usage_spans.push(Span::styled(
-                format!("({})", left),
-                Style::default().fg(Color::DarkGray),
+                format!("({})", fmt_time_left(at, now)),
+                dim(Color::Rgb(80, 85, 100)),
             ));
         }
     }
 
-    // Line 2: mempalace
+    // Row 2: MemPalace stats
+    let mp_clr = Color::Rgb(165, 135, 210);
     let mut mp_parts: Vec<String> = Vec::new();
     if let Some(d) = &gi.mp_drawers {
         let mut s = d.clone();
-        if let Some(sz) = &gi.mp_size {
-            s.push_str(&format!("({})", sz));
-        }
+        if let Some(sz) = &gi.mp_size { s.push_str(&format!("({})", sz)); }
         mp_parts.push(s);
     }
     if let (Some(w), Some(r)) = (gi.mp_wings, gi.mp_rooms) {
         mp_parts.push(format!("{}W/{}R", w, r));
     }
-    if let Some(ago) = &gi.mp_ago {
-        mp_parts.push(ago.clone());
+    if let Some(at) = gi.mp_last_at {
+        mp_parts.push(fmt_time_ago(at, now));
     }
     let mp_str = mp_parts.join(" · ");
 
-    let mp_clr = Color::Rgb(180, 150, 220);
+    let mp_line = Line::from(vec![
+        Span::styled(" 🏛 ", dim(mp_clr)),
+        Span::styled(mp_str, dim(mp_clr)),
+    ]);
 
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(usage_spans),
-            Line::from(vec![
-                Span::styled("🏛 ", Style::default().fg(mp_clr)),
-                Span::styled(mp_str, Style::default().fg(mp_clr)),
-            ]),
-        ]),
+        Paragraph::new(vec![sep_line, Line::from(usage_spans), mp_line])
+            .style(info_style),
         area,
     );
 }
