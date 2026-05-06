@@ -157,12 +157,26 @@ impl Tmux {
                 // Not a tracked command. Record as an extra pane unless it's another
                 // ccmux sidebar (auto-opened by ensure_sidebar_in_window in other windows).
                 if !command.to_lowercase().contains("ccmux") {
-                    // Always look for the deepest foreground non-shell command so we
-                    // show "ol start" instead of "ol" and nothing instead of "/bin/zsh".
-                    let effective_cmd = match find_foreground_command(pane_pid, &proc_tree, 0) {
-                        Some((child_pid, child_comm)) =>
-                            get_full_args(child_pid).unwrap_or(child_comm),
-                        None => command,
+                    let effective_cmd = if is_idle_shell(&command) {
+                        // Bare shell: descend process tree to find what's actually running.
+                        match find_foreground_command(pane_pid, &proc_tree, 0) {
+                            Some((child_pid, child_comm)) =>
+                                get_full_args(child_pid).unwrap_or(child_comm),
+                            None => command,
+                        }
+                    } else {
+                        // Known foreground command (e.g. "ol"): look for it as a direct
+                        // child of the shell to get full args ("ol start"). If it's a
+                        // script wrapper the direct child comm won't match, so we fall
+                        // back to the tmux-reported name rather than surfacing a deeply
+                        // nested subprocess (e.g. "npm exec tsx --watch").
+                        let cmd_base = command.rsplit('/').next().unwrap_or(&command).to_lowercase();
+                        proc_tree.get(&pane_pid)
+                            .and_then(|children| children.iter()
+                                .find(|(_, comm)| comm.to_lowercase() == cmd_base)
+                                .map(|(pid, _)| *pid))
+                            .and_then(get_full_args)
+                            .unwrap_or(command)
                     };
                     extra_map.entry(window_id).or_default()
                         .push(crate::session::ExtraPane { command: effective_cmd, path: current_path });
