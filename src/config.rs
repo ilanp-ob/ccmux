@@ -36,7 +36,7 @@ impl Default for SidebarConfig {
             position: "left".into(),
             refresh_ms: 5000,
             status_ms: 5000,
-            sticky: false,
+            sticky: true,
         }
     }
 }
