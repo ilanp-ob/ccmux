@@ -991,7 +991,9 @@ fn render_edit_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::raw("  "),
-            key("Tab"), hint(" next field  "), key("Enter"), hint(" apply  "), key("Esc"), hint(" cancel"),
+            key("Tab"), hint(" next field  "),
+            key("^B"), hint(" 🤖 toggle  "),
+            key("Enter"), hint(" apply  "), key("Esc"), hint(" cancel"),
         ]),
     ];
 

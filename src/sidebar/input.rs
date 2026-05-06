@@ -208,6 +208,16 @@ fn handle_edit_window(app: &mut App, key: KeyEvent) {
             n.pop();
             app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
         }
+        // Ctrl+B toggles the 🤖 prefix on the name field
+        KeyCode::Char('b') if field == 0 && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            const BOT: &str = "\u{1F916} ";
+            let n = if name.starts_with(BOT) {
+                name[BOT.len()..].to_string()
+            } else {
+                format!("{}{}", BOT, name)
+            };
+            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
+        }
         KeyCode::Char(c) if field == 0 => {
             let mut n = name;
             n.push(c);
