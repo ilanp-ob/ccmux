@@ -85,8 +85,9 @@ impl Tmux {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut groups: Vec<WindowGroup> = Vec::new();
         let mut display_num = 1usize;
-        // extra_counts[window_id] = count of non-Claude, non-sidebar panes
-        let mut extra_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        // Collect non-Claude panes per window for display in the sidebar.
+        let mut extra_map: std::collections::HashMap<String, Vec<crate::session::ExtraPane>> =
+            std::collections::HashMap::new();
 
         // Build process tree once for all panes — used to find versioned binaries
         // like claude's "2.1.126" whose comm name is still "claude".
@@ -116,17 +117,19 @@ impl Tmux {
                 .or_else(|| classify_descendant(pane_pid, &proc_tree, configured_commands, 0));
 
             let Some(pane_type) = pane_type else {
-                // Not a tracked command. Count as "extra" unless it's a ccmux sidebar pane
-                // (which can appear in other windows when auto-opened by ensure_sidebar_in_window).
+                // Not a tracked command. Record as an extra pane unless it's another
+                // ccmux sidebar (auto-opened by ensure_sidebar_in_window in other windows).
                 if !command.to_lowercase().contains("ccmux") {
-                    *extra_counts.entry(window_id).or_insert(0) += 1;
+                    extra_map.entry(window_id).or_default()
+                        .push(crate::session::ExtraPane { command, path: current_path });
                 }
                 continue;
             };
 
             // Only list Claude Code sessions
             if !matches!(pane_type, PaneType::Claude) {
-                *extra_counts.entry(window_id.clone()).or_insert(0) += 1;
+                extra_map.entry(window_id.clone()).or_default()
+                    .push(crate::session::ExtraPane { command, path: current_path });
                 continue;
             }
 
@@ -158,15 +161,15 @@ impl Tmux {
                     window_name,
                     server: self.server.clone(),
                     panes: vec![pane],
-                    extra_pane_count: 0,
+                    extra_panes: Vec::new(),
                 });
             }
         }
 
-        // Attach extra pane counts collected above.
+        // Attach extra panes collected above.
         for group in &mut groups {
-            if let Some(&n) = extra_counts.get(&group.window_id) {
-                group.extra_pane_count = n;
+            if let Some(extras) = extra_map.remove(&group.window_id) {
+                group.extra_panes = extras;
             }
         }
 

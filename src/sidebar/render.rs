@@ -195,6 +195,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         branch: String,
         path_short: String,
         preview: Vec<String>, // populated for selected; may get 1 line added for others
+        /// Extra non-Claude panes in this window; rendered below the last Claude pane.
+        /// Each entry is (command, folder_name).
+        extra_panes: Vec<(String, String)>,
     }
     enum Entry { Header(String), Item(RenderItem) }
 
@@ -206,7 +209,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         let show_hdr = true; // always show window group header
         let mut hdr_pushed = false;
 
-        for pane in &group.panes {
+        let last_pane_idx_in_group = group.panes.len().saturating_sub(1);
+
+        for (pane_pos, pane) in group.panes.iter().enumerate() {
             let pane_idx = flat_idx;
             flat_idx += 1;
             if pane_idx < scroll { continue; }
@@ -216,12 +221,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let win_idx = group.panes.first().map(|p| p.window_index.as_str()).unwrap_or("?");
                 let srv = group.server.as_deref()
                     .map(|s| format!(" [{}]", s)).unwrap_or_default();
-                let extra = if group.extra_pane_count > 0 {
-                    format!("  +{}", group.extra_pane_count)
-                } else {
-                    String::new()
-                };
-                entries.push(Entry::Header(format!("  win {}{}{}", win_idx, srv, extra)));
+                entries.push(Entry::Header(format!("  win {}{}", win_idx, srv)));
                 rows_used += 1;
                 hdr_pushed = true;
             }
@@ -237,8 +237,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 Vec::new()
             };
 
-            // min height: 3 content rows + 1 separator + preview for selected
-            let min_h = 3 + 1 + if is_sel { preview.len().max(1) } else { 0 };
+            let extra_count = if pane_pos == last_pane_idx_in_group { group.extra_panes.len() } else { 0 };
+            // min height: 3 content rows + extra pane sub-rows + 1 separator + preview for selected
+            let min_h = 3 + extra_count + 1 + if is_sel { preview.len().max(1) } else { 0 };
             if rows_used + min_h > area_h { break 'collect; }
             rows_used += min_h;
 
@@ -249,6 +250,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let branch_short = truncate(&branch, inner_w.saturating_sub(1));
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
+
+            // Attach extra pane rows only to the last Claude pane in the group.
+            let extra_panes: Vec<(String, String)> = if pane_pos == last_pane_idx_in_group {
+                group.extra_panes.iter().map(|ep| {
+                    let folder = ep.path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| ep.path.to_string_lossy().into_owned());
+                    (ep.command.clone(), folder)
+                }).collect()
+            } else {
+                Vec::new()
+            };
 
             entries.push(Entry::Item(RenderItem {
                 pane_id: pane.pane_id.clone(),
@@ -261,6 +274,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 branch: branch_short,
                 path_short,
                 preview,
+                extra_panes,
             }));
         }
     }
@@ -438,6 +452,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                             fill(),
                         ]).style(base));
                     }
+                }
+
+                // ── Extra (non-Claude) panes ──────────────────────────────────
+                for (cmd, folder) in &item.extra_panes {
+                    let label = truncate(
+                        &format!("   · {}  {}", cmd, folder),
+                        inner_w.saturating_sub(1),
+                    );
+                    lines.push(Line::from(vec![
+                        Span::styled(label, Style::default().fg(Color::Rgb(60, 65, 82)).bg(ROW_BG)),
+                        Span::styled(" ".repeat(area_w), Style::default().bg(ROW_BG)),
+                    ]));
                 }
 
                 // ── Separator ─────────────────────────────────────────────────

@@ -60,6 +60,13 @@ impl DetectedPane {
     }
 }
 
+/// A non-Claude pane co-existing in the same tmux window as a Claude session.
+#[derive(Debug, Clone)]
+pub struct ExtraPane {
+    pub command: String,
+    pub path: PathBuf,
+}
+
 /// All detected panes in a single tmux window, from one server
 #[derive(Debug, Clone)]
 pub struct WindowGroup {
@@ -68,6 +75,6 @@ pub struct WindowGroup {
     /// None = default server
     pub server: Option<String>,
     pub panes: Vec<DetectedPane>,
-    /// Number of non-Claude, non-sidebar panes in this window (e.g. zsh, cargo, nvim).
-    pub extra_pane_count: usize,
+    /// Non-Claude, non-sidebar panes sharing this window (e.g. zsh, cargo, nvim).
+    pub extra_panes: Vec<ExtraPane>,
 }
