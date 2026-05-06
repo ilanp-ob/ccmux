@@ -145,9 +145,6 @@ fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() { continue; }
-            if path.file_name()
-                .map(|n| n.to_string_lossy().starts_with('.'))
-                .unwrap_or(true) { continue; }
             dirs.push(path);
         }
     }
@@ -672,9 +669,7 @@ impl App {
             Self::spawn_vscode(&path);
         }
 
-        if self.sticky {
-            self.ensure_sidebar_in_window(&window_id, None);
-        }
+        self.ensure_sidebar_in_window(&window_id, None);
         self.message = Some(format!("✓ Session created: {}", window_name));
         self.mode = Mode::Normal;
         let _ = self.refresh();
@@ -737,6 +732,23 @@ impl App {
         }));
     }
 
+    /// Like start_worktree_flow, but uses a caller-supplied repo path instead of the selected pane.
+    pub fn start_worktree_flow_for_path(&mut self, path: std::path::PathBuf) {
+        let Some(repo_root) = crate::git::find_main_repo_root(&path) else {
+            self.error = Some(format!("Not a git repository: {}", path.display()));
+            return;
+        };
+        let root_str = repo_root.to_string_lossy().to_string();
+        self.fetch_repo_root = Some(root_str);
+        self.mode = crate::sidebar::mode::Mode::WorktreeFlow(
+            crate::sidebar::mode::WorktreeStep::Fetching,
+        );
+        self.fetch_handle = Some(std::thread::spawn(move || {
+            crate::git::fetch_origin(&repo_root).ok();
+            crate::git::list_branches(&repo_root)
+        }));
+    }
+
     /// Execute worktree creation (or open an existing one) after user confirms options.
     /// `existing_wt_path` is `Some` when the worktree already exists — skips `git worktree add`
     /// and instead finds or opens a tmux window at that path.
@@ -787,9 +799,7 @@ impl App {
                     let effort = AVAILABLE_EFFORTS[opts.effort_idx];
                     let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
                 }
-                if self.sticky {
-                    self.ensure_sidebar_in_window(&wid, None);
-                }
+                self.ensure_sidebar_in_window(&wid, None);
                 self.mode = crate::sidebar::mode::Mode::Normal;
                 let _ = self.refresh();
                 return;
@@ -814,8 +824,18 @@ impl App {
             );
 
             let repo_path = std::path::PathBuf::from(repo_root);
-            let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
-            let worktree_path = parent.join(folder);
+            let worktree_path = if std::path::Path::new(folder).is_absolute() {
+                std::path::PathBuf::from(folder)
+            } else {
+                let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
+                parent.join(folder)
+            };
+
+            if worktree_path.exists() {
+                self.error = Some(format!("Path already exists: {}", worktree_path.display()));
+                self.mode = crate::sidebar::mode::Mode::Normal;
+                return;
+            }
 
             if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch) {
                 self.error = Some(format!("Worktree error: {}", e));
@@ -857,9 +877,7 @@ impl App {
             let effort = AVAILABLE_EFFORTS[opts.effort_idx];
             let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
         }
-        if self.sticky {
-            self.ensure_sidebar_in_window(&window_id, None);
-        }
+        self.ensure_sidebar_in_window(&window_id, None);
 
         self.message = Some(format!("✓ Worktree ready: {}", folder));
         self.mode = crate::sidebar::mode::Mode::Normal;

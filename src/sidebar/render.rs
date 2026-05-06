@@ -613,6 +613,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     ]),
                     Line::from(vec![
                         key("s"), hint(" sticky"), sep(),
+                        key("o"), hint(" houston wt"), sep(),
                         key("?"), hint(" help"), sep(),
                         key("q"), hint(" quit"),
                     ]),
@@ -725,6 +726,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("l",      "Action menu (PR ops, delete worktree)"),
         row("c",      "New session — pick folder, launch Claude"),
         row("w",      "New worktree (fetch → branch → options)"),
+        row("o",      "New worktree on ~/dev/houston"),
         row("r",      "Rename current window"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),
@@ -1064,14 +1066,10 @@ fn render_folder_name_overlay(frame: &mut Frame, area: Rect, folder: &str) {
     let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
     let lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled("  Folder: ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Path: ", Style::default().fg(Color::Cyan)),
             Span::styled(folder, Style::default().fg(Color::White)),
             cursor,
         ]),
-        Line::from(Span::styled(
-            "  (created alongside the main repo)",
-            Style::default().fg(Color::DarkGray),
-        )),
         Line::from(vec![
             Span::raw("  "),
             key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
@@ -1083,7 +1081,7 @@ fn render_folder_name_overlay(frame: &mut Frame, area: Rect, folder: &str) {
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default()
-                .title(" New worktree — folder name ")
+                .title(" New worktree — path ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)))
             .style(Style::default().bg(Color::Rgb(18, 20, 26))),
@@ -1248,12 +1246,20 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
 
                     let prefix = if is_git { "⎇ " } else { "  " };
                     let prefix_clr = if is_git { git_clr } else { dim_clr };
+                    let branch = if is_git { read_git_branch(path) } else { None };
 
-                    list_lines.push(Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(" ", Style::default().bg(line_bg)),
                         Span::styled(prefix, Style::default().fg(prefix_clr).bg(line_bg)),
                         Span::styled(name, name_style),
-                    ]));
+                    ];
+                    if let Some(b) = branch {
+                        spans.push(Span::styled(
+                            format!(" ({})", b),
+                            Style::default().fg(Color::Rgb(70, 140, 90)).bg(line_bg),
+                        ));
+                    }
+                    list_lines.push(Line::from(spans));
                 }
             }
 
@@ -1379,6 +1385,21 @@ fn render_options_overlay_titled(
             .style(Style::default().bg(Color::Rgb(18, 20, 26))),
         overlay,
     );
+}
+
+/// Read the current branch name from a git repo's .git/HEAD without spawning a subprocess.
+fn read_git_branch(path: &std::path::Path) -> Option<String> {
+    let git_path = path.join(".git");
+    let head_path = if git_path.is_dir() {
+        git_path.join("HEAD")
+    } else {
+        // Worktree: .git is a file "gitdir: /path/to/actual/gitdir"
+        let content = std::fs::read_to_string(&git_path).ok()?;
+        let gitdir = content.strip_prefix("gitdir: ")?.trim();
+        std::path::PathBuf::from(gitdir).join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    head.trim().strip_prefix("ref: refs/heads/").map(|s| s.to_string())
 }
 
 fn status_color(status: &ClaudeCodeStatus) -> Color {

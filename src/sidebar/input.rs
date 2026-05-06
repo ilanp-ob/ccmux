@@ -77,6 +77,12 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('w') => {
             app.start_worktree_flow();
         }
+        KeyCode::Char('o') => {
+            let houston = std::path::PathBuf::from(
+                std::env::var("HOME").unwrap_or_default()
+            ).join("dev").join("houston");
+            app.start_worktree_flow_for_path(houston);
+        }
         KeyCode::Char('l') => {
             let items = app.action_items_for_selected();
             if !items.is_empty() {
@@ -434,7 +440,9 @@ fn handle_worktree_branch_select(
                 return;
             }
 
-            let folder = crate::git::branch_to_folder(&repo_path, &branch);
+            let folder_name = crate::git::branch_to_folder(&repo_path, &branch);
+            let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
+            let folder = parent.join(&folder_name).to_string_lossy().into_owned();
             app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
                 repo_root,
                 branch,

@@ -43,7 +43,7 @@ pub enum WorktreeStep {
         entering_new: bool,
         new_branch_text: String,
     },
-    /// Edit the folder name (derived from branch, full path shown as hint)
+    /// Edit the full worktree path (pre-filled alongside main repo; user can change it freely)
     FolderName { repo_root: String, branch: String, folder: String },
     /// Choose launch options.
     /// `existing_wt_path` is set when the worktree already exists — skips `git worktree add`.
