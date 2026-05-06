@@ -68,4 +68,6 @@ pub struct WindowGroup {
     /// None = default server
     pub server: Option<String>,
     pub panes: Vec<DetectedPane>,
+    /// Number of non-Claude, non-sidebar panes in this window (e.g. zsh, cargo, nvim).
+    pub extra_pane_count: usize,
 }

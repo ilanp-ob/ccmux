@@ -193,6 +193,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         branch: String,
         path_short: String,
         preview: Vec<String>, // populated for selected; may get 1 line added for others
+        /// Extra non-Claude panes in this window; shown inline only for single-Claude groups
+        extra_pane_count: usize,
     }
     enum Entry { Header(String), Item(RenderItem) }
 
@@ -201,7 +203,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     let mut flat_idx = 0usize;
 
     'collect: for group in &app.groups {
-        let show_hdr = group.panes.len() > 1 || group.server.is_some();
+        let multi_claude = group.panes.len() > 1;
+        let show_hdr = multi_claude || group.server.is_some();
         let mut hdr_pushed = false;
 
         for pane in &group.panes {
@@ -214,7 +217,12 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let win_idx = group.panes.first().map(|p| p.window_index.as_str()).unwrap_or("?");
                 let srv = group.server.as_deref()
                     .map(|s| format!(" [{}]", s)).unwrap_or_default();
-                entries.push(Entry::Header(format!("  win {}{}", win_idx, srv)));
+                let extra = if group.extra_pane_count > 0 {
+                    format!("  +{}", group.extra_pane_count)
+                } else {
+                    String::new()
+                };
+                entries.push(Entry::Header(format!("  win {}{}{}", win_idx, srv, extra)));
                 rows_used += 1;
                 hdr_pushed = true;
             }
@@ -238,7 +246,10 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let branch = pane.git_branch().unwrap_or_else(|| "?".to_string());
             let name = pane_display_name(pane);
             let num_str = format!("%{}", pane.display_num);
-            let name_short = truncate(&name, inner_w.saturating_sub(4 + num_str.len()));
+            // Reserve space for inline "+N" tag on single-Claude-pane windows with extras.
+            let extra_inline = !multi_claude && group.extra_pane_count > 0;
+            let extra_reserve = if extra_inline { 2 + group.extra_pane_count.to_string().len() } else { 0 };
+            let name_short = truncate(&name, inner_w.saturating_sub(4 + num_str.len() + extra_reserve));
             let branch_short = truncate(&branch, inner_w.saturating_sub(1));
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
@@ -254,6 +265,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 branch: branch_short,
                 path_short,
                 preview,
+                extra_pane_count: if extra_inline { group.extra_pane_count } else { 0 },
             }));
         }
     }
@@ -333,18 +345,25 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     Color::White
                 };
                 let name_mod = if item.is_sel || item.is_cur { Modifier::BOLD } else { Modifier::empty() };
+                let extra_tag = if item.extra_pane_count > 0 {
+                    format!("+{} ", item.extra_pane_count)
+                } else {
+                    String::new()
+                };
                 let left_len = 2 + 1 + icon.chars().count() + 1 + item.name.chars().count();
-                let pad = area_w.saturating_sub(left_len + item.num_str.len());
+                let right_len = extra_tag.len() + item.num_str.len();
+                let pad = area_w.saturating_sub(left_len + right_len);
 
                 click_rows.push((area.y + lines.len() as u16, item.pane_idx));
 
-                // ── Line 1: [W][S] icon name ··· %N ──────────────────────────
+                // ── Line 1: [W][S] icon name ··· +N %N ───────────────────────
                 lines.push(Line::from(vec![
                     win_span, sel_span,
                     Span::styled(format!(" {} ", icon), sp(sc)),
                     Span::styled(item.name.clone(),
                         Style::default().fg(name_fg).add_modifier(name_mod).bg(row_bg)),
                     Span::styled(" ".repeat(pad), base),
+                    Span::styled(extra_tag, sp(Color::Rgb(80, 95, 80))),
                     Span::styled(item.num_str.clone(), sp(Color::Rgb(70, 70, 70))),
                     fill(),
                 ]).style(base));

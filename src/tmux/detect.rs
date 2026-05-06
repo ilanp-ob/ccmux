@@ -85,6 +85,8 @@ impl Tmux {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut groups: Vec<WindowGroup> = Vec::new();
         let mut display_num = 1usize;
+        // extra_counts[window_id] = count of non-Claude, non-sidebar panes
+        let mut extra_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         // Build process tree once for all panes — used to find versioned binaries
         // like claude's "2.1.126" whose comm name is still "claude".
@@ -112,11 +114,16 @@ impl Tmux {
             // by comm name — version-proof (works regardless of binary filename).
             let pane_type = classify_command(&command, configured_commands)
                 .or_else(|| classify_descendant(pane_pid, &proc_tree, configured_commands, 0));
+
             let Some(pane_type) = pane_type else {
+                // Not a tracked command — count it as an "extra" pane for its window.
+                *extra_counts.entry(window_id).or_insert(0) += 1;
                 continue;
             };
+
             // Only list Claude Code sessions
             if !matches!(pane_type, PaneType::Claude) {
+                *extra_counts.entry(window_id.clone()).or_insert(0) += 1;
                 continue;
             }
 
@@ -148,7 +155,15 @@ impl Tmux {
                     window_name,
                     server: self.server.clone(),
                     panes: vec![pane],
+                    extra_pane_count: 0,
                 });
+            }
+        }
+
+        // Attach extra pane counts collected above.
+        for group in &mut groups {
+            if let Some(&n) = extra_counts.get(&group.window_id) {
+                group.extra_pane_count = n;
             }
         }
 
