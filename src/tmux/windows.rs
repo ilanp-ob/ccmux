@@ -102,9 +102,33 @@ impl Tmux {
         Ok(())
     }
 
-    /// Set @ccmux_color on a window for status-bar coloring.
+    /// Set @ccmux_color on a window and sync window-status-style so the
+    /// tmux status bar reflects the chosen color.
     pub fn set_window_color(&self, window_id: &str, tmux_colour: &str) -> Result<()> {
-        self.set_window_var(window_id, "@ccmux_color", tmux_colour)
+        self.set_window_var(window_id, "@ccmux_color", tmux_colour)?;
+        if tmux_colour.is_empty() {
+            let _ = self.cmd()
+                .args(["set-window-option", "-ut", window_id, "window-status-style"])
+                .status();
+        } else {
+            let _ = self.set_window_var(
+                window_id, "window-status-style",
+                &format!("fg={}", tmux_colour),
+            );
+        }
+        Ok(())
+    }
+
+    /// Apply window-status-style to every window in the list that has a color.
+    /// Called once at startup to sync existing @ccmux_color values.
+    pub fn sync_status_styles(&self, windows: &[(&str, &str)]) {
+        for (window_id, colour) in windows {
+            if colour.is_empty() { continue; }
+            let _ = self.set_window_var(
+                window_id, "window-status-style",
+                &format!("fg={}", colour),
+            );
+        }
     }
 
     /// Focus a specific pane (select-pane).

@@ -173,6 +173,15 @@ impl App {
             Self::load_groups(&server, &managed_session, own_pane_id.as_deref(), &config)
         };
 
+        // Sync window-status-style for windows that already have @ccmux_color set
+        // (e.g. from a previous ccmux session).
+        {
+            let pairs: Vec<(&str, &str)> = groups.iter()
+                .filter_map(|g| g.color_name.as_deref().map(|c| (g.window_id.as_str(), c)))
+                .collect();
+            tmux.sync_status_styles(&pairs);
+        }
+
         // Start with the Claude pane in the same window as the sidebar selected,
         // so opening from a Claude window immediately highlights that session.
         let selected = Self::initial_selection(&groups, own_window_id.as_deref());
