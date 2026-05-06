@@ -251,9 +251,10 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             } else {
                 Vec::new()
             };
-            let extra_rows: usize = extra_panes.iter()
-                .map(|(_, cmd)| if cmd.is_some() { 2 } else { 1 })
-                .sum();
+            // +1 for the thin HDR_BG divider row that precedes the extra panes block.
+            let extra_rows: usize = if extra_panes.is_empty() { 0 } else {
+                1 + extra_panes.iter().map(|(_, cmd)| if cmd.is_some() { 2 } else { 1 }).sum::<usize>()
+            };
 
             // min height: 3 content rows + extra pane sub-rows + 1 separator + preview for selected
             let min_h = 3 + extra_rows + 1 + if is_sel { preview.len().max(1) } else { 0 };
@@ -460,6 +461,12 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 }
 
                 // ── Extra (non-Claude) panes ──────────────────────────────────
+                if !item.extra_panes.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        " ".repeat(area_w),
+                        Style::default().bg(HDR_BG),
+                    )));
+                }
                 for (path_display, cmd) in &item.extra_panes {
                     // Line 1: path (always)
                     let path_label = truncate(
