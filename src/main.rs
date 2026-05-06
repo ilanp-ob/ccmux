@@ -324,6 +324,10 @@ fn run_sidebar_loop(
         if app.tick_alerts() {
             needs_redraw = true;
         }
+
+        if app.tick_message() {
+            needs_redraw = true;
+        }
     }
 
     Ok(())

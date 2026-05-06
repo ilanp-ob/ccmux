@@ -137,6 +137,8 @@ pub struct App {
     /// Window IDs that have a pending @ccmux_alert (notified but not yet focused).
     pub alerted_windows: HashSet<String>,
     last_alerts_tick: Instant,
+    /// When the current `message` was set — used to auto-clear it after ~3 s.
+    message_shown_at: Option<Instant>,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -206,6 +208,7 @@ impl App {
             last_global_info_tick: Instant::now(),
             alerted_windows: HashSet::new(),
             last_alerts_tick: Instant::now(),
+            message_shown_at: None,
         })
     }
 
@@ -295,6 +298,24 @@ impl App {
     pub fn clear_messages(&mut self) {
         self.error = None;
         self.message = None;
+        self.message_shown_at = None;
+    }
+
+    pub fn set_message(&mut self, msg: impl Into<String>) {
+        self.message = Some(msg.into());
+        self.message_shown_at = Some(Instant::now());
+    }
+
+    /// Auto-clear the message after 3 seconds. Returns true if the display changed.
+    pub fn tick_message(&mut self) -> bool {
+        if let Some(shown_at) = self.message_shown_at {
+            if shown_at.elapsed() >= Duration::from_secs(3) {
+                self.message = None;
+                self.message_shown_at = None;
+                return true;
+            }
+        }
+        false
     }
 
     /// Refresh groups from tmux. Returns true if anything changed.
@@ -453,7 +474,7 @@ impl App {
         let tmux = Tmux::new(self.managed_server.clone());
         let val = if self.sticky { "1" } else { "0" };
         let _ = tmux.set_var("@ccmux_sticky", val);
-        self.message = Some(if self.sticky { "Sticky on" } else { "Sticky off" }.into());
+        self.set_message(if self.sticky { "Sticky on" } else { "Sticky off" });
     }
 
     /// Send `text` followed by Enter to the selected Claude pane.
@@ -462,7 +483,7 @@ impl App {
         let pane_id = pane.pane_id.clone();
         let tmux = Tmux::new(self.managed_server.clone());
         match tmux.send_keys(&pane_id, text) {
-            Ok(_) => self.message = Some("Sent".into()),
+            Ok(_) => self.set_message("Sent"),
             Err(e) => self.error = Some(format!("Send failed: {}", e)),
         }
     }
@@ -670,7 +691,7 @@ impl App {
         }
 
         self.ensure_sidebar_in_window(&window_id, None);
-        self.message = Some(format!("✓ Session created: {}", window_name));
+        self.set_message(format!("✓ Session created: {}", window_name));
         self.mode = Mode::Normal;
         let _ = self.refresh();
     }
@@ -693,7 +714,7 @@ impl App {
                 let pane_path  = parts.next().unwrap_or("").trim();
                 if pane_path.starts_with(wt_path) {
                     let _ = tmux.select_window(&window_id);
-                    self.message = Some("Switched to existing worktree window".into());
+                    self.set_message("Switched to existing worktree window");
                     return;
                 }
             }
@@ -705,7 +726,7 @@ impl App {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "worktree".to_string());
         match tmux.new_window(&self.managed_session, &window_name, &path) {
-            Ok(_) => self.message = Some(format!("Opened existing worktree: {}", window_name)),
+            Ok(_) => self.set_message(format!("Opened existing worktree: {}", window_name)),
             Err(e) => self.error = Some(format!("Failed to open worktree window: {}", e)),
         }
     }
@@ -787,7 +808,7 @@ impl App {
 
             if let Some(wid) = found {
                 let _ = tmux.select_window(&wid);
-                self.message = Some(format!("✓ Switched to existing worktree: {}", folder));
+                self.set_message(format!("✓ Switched to existing worktree: {}", folder));
                 // Apply options to the already-open window then return.
                 if !tmux_colour.is_empty() { let _ = tmux.set_window_color(&wid, tmux_colour); }
                 if opts.open_vscode {
@@ -879,7 +900,7 @@ impl App {
         }
         self.ensure_sidebar_in_window(&window_id, None);
 
-        self.message = Some(format!("✓ Worktree ready: {}", folder));
+        self.set_message(format!("✓ Worktree ready: {}", folder));
         self.mode = crate::sidebar::mode::Mode::Normal;
         let _ = self.refresh();
     }
@@ -950,7 +971,7 @@ impl App {
             self.ensure_sidebar_in_window(&window_id, None);
         }
 
-        self.message = Some(format!("✓ Window created: {}", window_name));
+        self.set_message(format!("✓ Window created: {}", window_name));
         self.mode = crate::sidebar::mode::Mode::Normal;
         let _ = self.refresh();
     }
@@ -964,7 +985,7 @@ impl App {
         let window_id = pane.window_id.clone();
         let tmux = Tmux::new(self.managed_server.clone());
         match tmux.rename_window(&window_id, new_name.trim()) {
-            Ok(_) => self.message = Some(format!("✓ Renamed: {}", new_name.trim())),
+            Ok(_) => self.set_message(format!("✓ Renamed: {}", new_name.trim())),
             Err(e) => self.error = Some(format!("Rename failed: {}", e)),
         }
         self.mode = crate::sidebar::mode::Mode::Normal;
@@ -990,7 +1011,7 @@ impl App {
                 let _ = tmux.select_window(&window_id);
                 let _ = tmux.select_pane(&pane_id);
                 let _ = tmux.send_keys(&pane_id, cmd);
-                self.message = Some(format!("Sent: {}", cmd));
+                self.set_message(format!("Sent: {}", cmd));
                 self.mode = crate::sidebar::mode::Mode::Normal;
             }
             ActionItem::DeleteWorktree { repo_root, worktree_path } => {
