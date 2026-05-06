@@ -153,6 +153,10 @@ fn extract_preview_lines(content: &str, max_line_len: usize, max_lines: usize) -
     meaningful
 }
 
+fn is_shell_cmd(cmd: &str) -> bool {
+    matches!(cmd, "zsh" | "bash" | "fish" | "sh" | "dash" | "csh" | "tcsh" | "nu")
+}
+
 fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) {
     let total_items = App::flat_panes_ref(&app.groups).len();
     if total_items == 0 {
@@ -196,8 +200,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         path_short: String,
         preview: Vec<String>, // populated for selected; may get 1 line added for others
         /// Extra non-Claude panes in this window; rendered below the last Claude pane.
-        /// Each entry is (command, folder_name).
-        extra_panes: Vec<(String, String)>,
+        /// Each entry is (path_display, optional_command). Command is None for idle shells.
+        extra_panes: Vec<(String, Option<String>)>,
     }
     enum Entry { Header(String), Item(RenderItem) }
 
@@ -237,9 +241,22 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 Vec::new()
             };
 
-            let extra_count = if pane_pos == last_pane_idx_in_group { group.extra_panes.len() } else { 0 };
+            // Compute extra pane display data before min_h (row count depends on content).
+            let extra_panes: Vec<(String, Option<String>)> = if pane_pos == last_pane_idx_in_group {
+                group.extra_panes.iter().map(|ep| {
+                    let path_display = shorten_path(&ep.path);
+                    let cmd = if is_shell_cmd(&ep.command) { None } else { Some(ep.command.clone()) };
+                    (path_display, cmd)
+                }).collect()
+            } else {
+                Vec::new()
+            };
+            let extra_rows: usize = extra_panes.iter()
+                .map(|(_, cmd)| if cmd.is_some() { 2 } else { 1 })
+                .sum();
+
             // min height: 3 content rows + extra pane sub-rows + 1 separator + preview for selected
-            let min_h = 3 + extra_count + 1 + if is_sel { preview.len().max(1) } else { 0 };
+            let min_h = 3 + extra_rows + 1 + if is_sel { preview.len().max(1) } else { 0 };
             if rows_used + min_h > area_h { break 'collect; }
             rows_used += min_h;
 
@@ -250,18 +267,6 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let branch_short = truncate(&branch, inner_w.saturating_sub(1));
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
-
-            // Attach extra pane rows only to the last Claude pane in the group.
-            let extra_panes: Vec<(String, String)> = if pane_pos == last_pane_idx_in_group {
-                group.extra_panes.iter().map(|ep| {
-                    let folder = ep.path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| ep.path.to_string_lossy().into_owned());
-                    (ep.command.clone(), folder)
-                }).collect()
-            } else {
-                Vec::new()
-            };
 
             entries.push(Entry::Item(RenderItem {
                 pane_id: pane.pane_id.clone(),
@@ -455,15 +460,27 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 }
 
                 // ── Extra (non-Claude) panes ──────────────────────────────────
-                for (cmd, folder) in &item.extra_panes {
-                    let label = truncate(
-                        &format!("   · {}  {}", cmd, folder),
+                for (path_display, cmd) in &item.extra_panes {
+                    // Line 1: path (always)
+                    let path_label = truncate(
+                        &format!("   · {}", path_display),
                         inner_w.saturating_sub(1),
                     );
                     lines.push(Line::from(vec![
-                        Span::styled(label, Style::default().fg(Color::Rgb(60, 65, 82)).bg(ROW_BG)),
+                        Span::styled(path_label, Style::default().fg(Color::Rgb(60, 65, 82)).bg(ROW_BG)),
                         Span::styled(" ".repeat(area_w), Style::default().bg(ROW_BG)),
                     ]));
+                    // Line 2: command (only when something real is running, not a bare shell)
+                    if let Some(command) = cmd {
+                        let cmd_label = truncate(
+                            &format!("     {}", command),
+                            inner_w.saturating_sub(1),
+                        );
+                        lines.push(Line::from(vec![
+                            Span::styled(cmd_label, Style::default().fg(Color::Rgb(50, 55, 72)).bg(ROW_BG)),
+                            Span::styled(" ".repeat(area_w), Style::default().bg(ROW_BG)),
+                        ]));
+                    }
                 }
 
                 // ── Separator ─────────────────────────────────────────────────
