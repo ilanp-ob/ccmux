@@ -11,8 +11,10 @@ use crate::config::{WINDOW_COLORS, AVAILABLE_MODELS, AVAILABLE_EFFORTS};
 use super::{App, Mode};
 use super::mode::WorktreeStep;
 
-// Alternating-row background for unfocused sidebar
-const ALT_BG: Color = Color::Rgb(28, 30, 36);
+// Window group header background (slightly lighter than sidebar bg)
+const HDR_BG: Color = Color::Rgb(22, 24, 31);
+// Session row background (consistent within a group)
+const ROW_BG: Color = Color::Rgb(28, 30, 38);
 const SEL_BG: Color = Color::Rgb(42, 46, 54);
 // The sidebar's own background when focused vs unfocused
 const FOCUSED_BG: Color = Color::Rgb(18, 20, 26);
@@ -193,8 +195,6 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         branch: String,
         path_short: String,
         preview: Vec<String>, // populated for selected; may get 1 line added for others
-        /// Extra non-Claude panes in this window; shown inline only for single-Claude groups
-        extra_pane_count: usize,
     }
     enum Entry { Header(String), Item(RenderItem) }
 
@@ -203,8 +203,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     let mut flat_idx = 0usize;
 
     'collect: for group in &app.groups {
-        let multi_claude = group.panes.len() > 1;
-        let show_hdr = multi_claude || group.server.is_some();
+        let show_hdr = true; // always show window group header
         let mut hdr_pushed = false;
 
         for pane in &group.panes {
@@ -246,10 +245,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let branch = pane.git_branch().unwrap_or_else(|| "?".to_string());
             let name = pane_display_name(pane);
             let num_str = format!("%{}", pane.display_num);
-            // Reserve space for inline "+N" tag on single-Claude-pane windows with extras.
-            let extra_inline = !multi_claude && group.extra_pane_count > 0;
-            let extra_reserve = if extra_inline { 2 + group.extra_pane_count.to_string().len() } else { 0 };
-            let name_short = truncate(&name, inner_w.saturating_sub(4 + num_str.len() + extra_reserve));
+            let name_short = truncate(&name, inner_w.saturating_sub(4 + num_str.len()));
             let branch_short = truncate(&branch, inner_w.saturating_sub(1));
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
@@ -265,7 +261,6 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 branch: branch_short,
                 path_short,
                 preview,
-                extra_pane_count: if extra_inline { group.extra_pane_count } else { 0 },
             }));
         }
     }
@@ -305,19 +300,17 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     for entry in &entries {
         match entry {
             Entry::Header(label) => {
-                lines.push(Line::from(Span::styled(
-                    label.clone(),
-                    Style::default().fg(Color::DarkGray).bg(sidebar_bg),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(label.clone(), Style::default().fg(Color::Rgb(85, 90, 110)).bg(HDR_BG)),
+                    Span::styled(" ".repeat(area_w), Style::default().bg(HDR_BG)),
+                ]));
             }
             Entry::Item(item) => {
                 let sc = status_color(&item.status);
                 let icon = item.status.icon();
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
                 const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
-                let row_bg: Color = if item.is_sel { SEL_BG }
-                    else if item.pane_idx % 2 == 0 { ALT_BG }
-                    else { sidebar_bg };
+                let row_bg: Color = if item.is_sel { SEL_BG } else { ROW_BG };
 
                 let sp = |fg: Color| Style::default().fg(fg).bg(row_bg);
                 let base = Style::default().bg(row_bg);
@@ -345,25 +338,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     Color::White
                 };
                 let name_mod = if item.is_sel || item.is_cur { Modifier::BOLD } else { Modifier::empty() };
-                let extra_tag = if item.extra_pane_count > 0 {
-                    format!("+{} ", item.extra_pane_count)
-                } else {
-                    String::new()
-                };
                 let left_len = 2 + 1 + icon.chars().count() + 1 + item.name.chars().count();
-                let right_len = extra_tag.len() + item.num_str.len();
-                let pad = area_w.saturating_sub(left_len + right_len);
+                let pad = area_w.saturating_sub(left_len + item.num_str.len());
 
                 click_rows.push((area.y + lines.len() as u16, item.pane_idx));
 
-                // ── Line 1: [W][S] icon name ··· +N %N ───────────────────────
+                // ── Line 1: [W][S] icon name ··· %N ──────────────────────────
                 lines.push(Line::from(vec![
                     win_span, sel_span,
                     Span::styled(format!(" {} ", icon), sp(sc)),
                     Span::styled(item.name.clone(),
                         Style::default().fg(name_fg).add_modifier(name_mod).bg(row_bg)),
                     Span::styled(" ".repeat(pad), base),
-                    Span::styled(extra_tag, sp(Color::Rgb(80, 95, 80))),
                     Span::styled(item.num_str.clone(), sp(Color::Rgb(70, 70, 70))),
                     fill(),
                 ]).style(base));

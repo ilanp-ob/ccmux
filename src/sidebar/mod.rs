@@ -818,7 +818,10 @@ impl App {
                 if opts.launch_claude {
                     let model = AVAILABLE_MODELS[opts.model_idx];
                     let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
+                    let display_name = std::path::Path::new(folder)
+                        .file_name().map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| folder.to_string());
+                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {} --name '{}'", model, effort, display_name));
                 }
                 self.ensure_sidebar_in_window(&wid, None);
                 self.mode = crate::sidebar::mode::Mode::Normal;
@@ -896,7 +899,10 @@ impl App {
         if opts.launch_claude {
             let model = AVAILABLE_MODELS[opts.model_idx];
             let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-            let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {} --name '{}'", model, effort, folder));
+            let display_name = wt_path_buf.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| folder.to_string());
+            let _ = tmux.send_keys(&window_id, &format!("claude --model {} --effort {} --name '{}'", model, effort, display_name));
         }
         self.ensure_sidebar_in_window(&window_id, None);
 

@@ -116,8 +116,11 @@ impl Tmux {
                 .or_else(|| classify_descendant(pane_pid, &proc_tree, configured_commands, 0));
 
             let Some(pane_type) = pane_type else {
-                // Not a tracked command — count it as an "extra" pane for its window.
-                *extra_counts.entry(window_id).or_insert(0) += 1;
+                // Not a tracked command. Count as "extra" unless it's a ccmux sidebar pane
+                // (which can appear in other windows when auto-opened by ensure_sidebar_in_window).
+                if !command.to_lowercase().contains("ccmux") {
+                    *extra_counts.entry(window_id).or_insert(0) += 1;
+                }
                 continue;
             };
 
