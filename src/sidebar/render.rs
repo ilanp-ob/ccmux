@@ -113,7 +113,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let footer_h = match app.mode {
         Mode::Normal | Mode::ActionHints => 3,
         Mode::Compose { .. } => 3,
-        Mode::Rename { .. } => 2,
+        Mode::EditWindow { .. } => 1,
         _ => 1,
     };
     let metrics_h: u16 = match app.mode {
@@ -147,7 +147,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     match &app.mode {
-        Mode::Rename { .. } => render_rename_overlay(frame, app, inner),
+        Mode::EditWindow { .. } => render_edit_window_overlay(frame, app, inner),
         Mode::NewWindow { .. } => render_new_window_overlay(frame, app, inner),
         Mode::ActionMenu { .. } => render_action_menu_overlay(frame, app, inner),
         Mode::WorktreeFlow(_) => render_worktree_overlay(frame, app, inner),
@@ -753,7 +753,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         key("l"), hint(" actions"), sep(),
                         key("w"), hint(" worktree"), sep(),
                         key("c"), hint(" new"), sep(),
-                        key("r"), hint(" rename"), sep(),
+                        key("e"), hint(" edit"), sep(),
                         key("K"), hint(" kill"),
                     ]),
                     Line::from(vec![
@@ -799,19 +799,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 area,
             );
         }
-        Mode::Rename { text } => {
-            let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+        Mode::EditWindow { .. } => {
             frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled("Rename: ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(text.as_str(), Style::default().fg(Color::White)),
-                        cursor,
-                    ]),
-                    Line::from(vec![
-                        key("Enter"), hint(" confirm  "), key("Tab"), hint(" 🤖 toggle  "), key("Esc"), hint(" cancel"),
-                    ]),
-                ]),
+                Paragraph::new(Line::from(vec![
+                    key("Tab"), hint(" next field  "), key("Enter"), hint(" apply  "), key("Esc"), hint(" cancel"),
+                ])),
                 area,
             );
         }
@@ -898,7 +890,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("c",      "New session — pick folder, launch Claude"),
         row("w",      "New worktree (fetch → branch → options)"),
         row("o",      "New worktree on ~/dev/houston"),
-        row("r",      "Rename current window"),
+        row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),
         section("Sidebar"),
@@ -954,22 +946,52 @@ fn overlay_rect(area: Rect, content_lines: usize) -> Rect {
     }
 }
 
-fn render_rename_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    let text = match &app.mode {
-        Mode::Rename { text } => text.as_str(),
+fn render_edit_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::config::WINDOW_COLORS;
+
+    let (name, color_idx, field) = match &app.mode {
+        Mode::EditWindow { name, color_idx, field, .. } => (name.as_str(), *color_idx, *field),
         _ => return,
     };
 
+    let color_name = WINDOW_COLORS.get(color_idx).map(|c| c.0).unwrap_or("none");
+
+    let field_style = |f: u8| -> (Style, Style) {
+        if field == f {
+            (Style::default().fg(Color::Cyan), Style::default().fg(Color::White))
+        } else {
+            (Style::default().fg(Color::DarkGray), Style::default().fg(Color::Rgb(100, 100, 110)))
+        }
+    };
+
     let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
-    let lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled("  Rename: ", Style::default().fg(Color::Cyan)),
-            Span::styled(text, Style::default().fg(Color::White)),
+    let (label0, val0) = field_style(0);
+    let (label1, val1) = field_style(1);
+
+    let name_spans: Vec<Span> = if field == 0 {
+        vec![
+            Span::styled("  Name:   ", label0),
+            Span::styled(name, val0),
             cursor,
+        ]
+    } else {
+        vec![
+            Span::styled("  Name:   ", label0),
+            Span::styled(name, val0),
+        ]
+    };
+
+    let lines: Vec<Line> = vec![
+        Line::from(name_spans),
+        Line::from(vec![
+            Span::styled("  Color:  ", label1),
+            Span::styled("◀ ", val1),
+            Span::styled(color_name, val1),
+            Span::styled(" ▶", val1),
         ]),
         Line::from(vec![
             Span::raw("  "),
-            key("Enter"), hint(" confirm  "), key("Tab"), hint(" 🤖 toggle  "), key("Esc"), hint(" cancel"),
+            key("Tab"), hint(" next field  "), key("Enter"), hint(" apply  "), key("Esc"), hint(" cancel"),
         ]),
     ];
 
@@ -978,7 +1000,7 @@ fn render_rename_overlay(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default()
-                .title(" Rename window ")
+                .title(" Edit window ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)))
             .style(Style::default().bg(Color::Rgb(18, 20, 26))),

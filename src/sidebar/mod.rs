@@ -1037,21 +1037,6 @@ impl App {
         let _ = self.refresh();
     }
 
-    pub fn execute_rename(&mut self, new_name: &str) {
-        if new_name.trim().is_empty() {
-            self.mode = crate::sidebar::mode::Mode::Normal;
-            return;
-        }
-        let Some(pane) = self.selected_pane() else { return };
-        let window_id = pane.window_id.clone();
-        let tmux = Tmux::new(self.managed_server.clone());
-        match tmux.rename_window(&window_id, new_name.trim()) {
-            Ok(_) => self.set_message(format!("✓ Renamed: {}", new_name.trim())),
-            Err(e) => self.error = Some(format!("Rename failed: {}", e)),
-        }
-        self.mode = crate::sidebar::mode::Mode::Normal;
-        let _ = self.refresh();
-    }
 
     /// Dispatch an ActionItem for the selected pane.
     pub fn send_action(&mut self, item: crate::sidebar::mode::ActionItem) {
@@ -1084,6 +1069,28 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Apply name and color edits to an existing window.
+    pub fn execute_edit_window(&mut self, window_id: &str, name: &str, color_idx: usize) {
+        use crate::config::WINDOW_COLORS;
+        let tmux = Tmux::new(self.managed_server.clone());
+
+        if !name.trim().is_empty() {
+            if let Err(e) = tmux.rename_window(window_id, name.trim()) {
+                self.error = Some(format!("Rename failed: {}", e));
+            }
+        }
+
+        let (_, _, tmux_colour) = WINDOW_COLORS[color_idx];
+        let _ = tmux.set_window_color(window_id, tmux_colour);
+        if let Some(group) = self.groups.iter_mut().find(|g| g.window_id == window_id) {
+            group.color_name = if tmux_colour.is_empty() { None } else { Some(tmux_colour.to_string()) };
+        }
+
+        self.mode = crate::sidebar::mode::Mode::Normal;
+        if self.error.is_none() { self.set_message("✓ Window updated".to_string()); }
+        let _ = self.refresh();
     }
 
     /// Build the action items list for the currently selected pane.

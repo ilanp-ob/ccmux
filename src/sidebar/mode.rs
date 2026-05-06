@@ -13,10 +13,10 @@ pub enum Mode {
     Help,
     /// Composing a free-text message to send to the selected Claude session
     Compose { text: String },
-    /// Renaming the selected window
-    Rename { text: String },
     /// Creating a new plain tmux window
     NewWindow { name: String, color_idx: usize, launch_claude: bool, field: u8 },
+    /// Editing an existing window's name and color
+    EditWindow { window_id: String, name: String, color_idx: usize, field: u8 },
     /// Multi-step worktree creation flow
     WorktreeFlow(WorktreeStep),
     /// Action menu for the selected pane (PR ops, delete worktree, …)

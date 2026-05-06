@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use super::{App, Mode};
 use super::mode::{WorktreeStep, FolderPickStep};
+use crate::config::WINDOW_COLORS;
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     // Don't clear messages while composing — let the user see what they're doing
@@ -14,8 +15,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::Confirm(_) => handle_confirm(app, key),
         Mode::Help => handle_help(app, key),
         Mode::Compose { .. } => handle_compose(app, key),
-        Mode::Rename { .. } => handle_rename(app, key),
         Mode::NewWindow { .. } => handle_new_window(app, key),
+        Mode::EditWindow { .. } => handle_edit_window(app, key),
         Mode::WorktreeFlow(_) => handle_worktree(app, key),
         Mode::ActionMenu { .. } => handle_action_menu(app, key),
         Mode::FolderPick(_) => handle_folder_pick(app, key),
@@ -68,18 +69,17 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('i') => {
             app.mode = Mode::Compose { text: String::new() };
         }
-        KeyCode::Char('r') => {
-            const ICON: &str = "\u{1F916}"; // 🤖
-            let prefill = app.selected_pane()
-                .map(|p| {
-                    if let Some(rest) = p.window_name.strip_prefix("cc:") {
-                        format!("{} {}", ICON, rest)
-                    } else {
-                        p.window_name.clone()
-                    }
-                })
-                .unwrap_or_default();
-            app.mode = Mode::Rename { text: prefill };
+        KeyCode::Char('e') => {
+            if let Some(pane) = app.selected_pane() {
+                let window_id = pane.window_id.clone();
+                let name = pane.window_name.clone();
+                let color_idx = app.groups.iter()
+                    .find(|g| g.window_id == window_id)
+                    .and_then(|g| g.color_name.as_deref())
+                    .and_then(|c| WINDOW_COLORS.iter().position(|(_, _, tc)| *tc == c))
+                    .unwrap_or(0);
+                app.mode = Mode::EditWindow { window_id, name, color_idx, field: 0 };
+            }
         }
         KeyCode::Char('c') => {
             app.start_folder_pick();
@@ -181,39 +181,45 @@ fn handle_compose(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_rename(app: &mut App, key: KeyEvent) {
-    let text = match &app.mode {
-        Mode::Rename { text } => text.clone(),
+fn handle_edit_window(app: &mut App, key: KeyEvent) {
+    let (window_id, name, color_idx, field) = match &app.mode {
+        Mode::EditWindow { window_id, name, color_idx, field } =>
+            (window_id.clone(), name.clone(), *color_idx, *field),
         _ => return,
     };
+
     match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
+        KeyCode::Esc => { app.mode = Mode::Normal; }
+        KeyCode::Enter => {
+            let wid = window_id.clone();
+            let n = name.clone();
+            app.execute_edit_window(&wid, &n, color_idx);
         }
         KeyCode::Tab => {
-            const PREFIX: &str = "\u{1F916} "; // 🤖
-            let new_text = if text.starts_with(PREFIX) {
-                text[PREFIX.len()..].to_string()
-            } else {
-                format!("{}{}", PREFIX, text)
-            };
-            app.mode = Mode::Rename { text: new_text };
+            let new_field = (field + 1) % 2;
+            app.mode = Mode::EditWindow { window_id, name, color_idx, field: new_field };
         }
-        KeyCode::Enter => {
-            let t = text.clone();
-            app.execute_rename(&t);
-            // execute_rename sets mode to Normal already, but set it again for safety
-            app.mode = Mode::Normal;
+        KeyCode::BackTab => {
+            let new_field = if field == 0 { 1 } else { 0 };
+            app.mode = Mode::EditWindow { window_id, name, color_idx, field: new_field };
         }
-        KeyCode::Backspace => {
-            let mut t = text;
-            t.pop();
-            app.mode = Mode::Rename { text: t };
+        KeyCode::Backspace if field == 0 => {
+            let mut n = name;
+            n.pop();
+            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
         }
-        KeyCode::Char(c) => {
-            let mut t = text;
-            t.push(c);
-            app.mode = Mode::Rename { text: t };
+        KeyCode::Char(c) if field == 0 => {
+            let mut n = name;
+            n.push(c);
+            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
+        }
+        KeyCode::Left if field == 1 => {
+            let new_idx = if color_idx == 0 { WINDOW_COLORS.len() - 1 } else { color_idx - 1 };
+            app.mode = Mode::EditWindow { window_id, name, color_idx: new_idx, field };
+        }
+        KeyCode::Right if field == 1 => {
+            let new_idx = (color_idx + 1) % WINDOW_COLORS.len();
+            app.mode = Mode::EditWindow { window_id, name, color_idx: new_idx, field };
         }
         _ => {}
     }
