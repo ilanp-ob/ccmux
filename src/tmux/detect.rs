@@ -21,6 +21,40 @@ pub fn classify_command(cmd: &str, configured: &[String]) -> Option<PaneType> {
     None
 }
 
+fn is_idle_shell(cmd: &str) -> bool {
+    let name = cmd.rsplit('/').next().unwrap_or(cmd);
+    matches!(name.to_lowercase().as_str(),
+        "zsh" | "bash" | "fish" | "sh" | "dash" | "csh" | "tcsh" | "nu")
+}
+
+/// Walk children of root_pid for the first non-shell process (foreground or background).
+/// Returns (child_pid, comm) so the caller can optionally fetch full args.
+fn find_foreground_command(
+    root_pid: u32,
+    tree: &std::collections::HashMap<u32, Vec<(u32, String)>>,
+    depth: u8,
+) -> Option<(u32, String)> {
+    if depth > 6 { return None; }
+    for (child_pid, comm) in tree.get(&root_pid)? {
+        if !is_idle_shell(comm) {
+            return Some((*child_pid, comm.clone()));
+        }
+        if let Some(found) = find_foreground_command(*child_pid, tree, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Get full command-line arguments for a single PID (fast — only scans one process).
+fn get_full_args(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "args="])
+        .output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
 /// Build a pid→[(child_pid, comm)] map from the full process table.
 /// Called once per list_groups invocation, shared across all panes.
 fn build_process_tree() -> std::collections::HashMap<u32, Vec<(u32, String)>> {
@@ -73,7 +107,7 @@ impl Tmux {
             .args([
                 "list-panes", "-s", "-t", session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_pid}",
+                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_pid}\t#{@ccmux_color}",
             ])
             .output()
             .context("tmux list-panes failed")?;
@@ -94,7 +128,7 @@ impl Tmux {
         let proc_tree = build_process_tree();
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.splitn(8, '\t').collect();
+            let parts: Vec<&str> = line.splitn(9, '\t').collect();
             if parts.len() < 7 { continue; }
 
             let pane_id     = parts[0].to_string();
@@ -105,6 +139,9 @@ impl Tmux {
             let pane_active = parts[5] == "1";
             let current_path = PathBuf::from(parts[6]);
             let pane_pid: u32 = parts.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let window_color: Option<String> = parts.get(8)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
 
             // Skip only the sidebar pane itself, not the whole window
             if exclude_pane_id.is_some_and(|excl| excl == pane_id) {
@@ -120,8 +157,15 @@ impl Tmux {
                 // Not a tracked command. Record as an extra pane unless it's another
                 // ccmux sidebar (auto-opened by ensure_sidebar_in_window in other windows).
                 if !command.to_lowercase().contains("ccmux") {
+                    // Always look for the deepest foreground non-shell command so we
+                    // show "ol start" instead of "ol" and nothing instead of "/bin/zsh".
+                    let effective_cmd = match find_foreground_command(pane_pid, &proc_tree, 0) {
+                        Some((child_pid, child_comm)) =>
+                            get_full_args(child_pid).unwrap_or(child_comm),
+                        None => command,
+                    };
                     extra_map.entry(window_id).or_default()
-                        .push(crate::session::ExtraPane { command, path: current_path });
+                        .push(crate::session::ExtraPane { command: effective_cmd, path: current_path });
                 }
                 continue;
             };
@@ -162,6 +206,7 @@ impl Tmux {
                     server: self.server.clone(),
                     panes: vec![pane],
                     extra_panes: Vec::new(),
+                    color_name: window_color,
                 });
             }
         }

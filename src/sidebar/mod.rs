@@ -139,6 +139,12 @@ pub struct App {
     last_alerts_tick: Instant,
     /// When the current `message` was set — used to auto-clear it after ~3 s.
     message_shown_at: Option<Instant>,
+    /// ccmux's own CPU% and RSS — polled every 5 s and shown in the footer.
+    pub own_cpu_pct: f32,
+    pub own_rss_mb: f32,
+    /// Rolling window of CPU samples (≤30 entries, 5 s apart = ~2.5 min history).
+    pub own_cpu_history: std::collections::VecDeque<f32>,
+    last_own_metrics_tick: Instant,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -209,6 +215,10 @@ impl App {
             alerted_windows: HashSet::new(),
             last_alerts_tick: Instant::now(),
             message_shown_at: None,
+            own_cpu_pct: 0.0,
+            own_rss_mb: 0.0,
+            own_cpu_history: std::collections::VecDeque::with_capacity(30),
+            last_own_metrics_tick: Instant::now(),
         })
     }
 
@@ -406,8 +416,10 @@ impl App {
         let own_window = self.own_window_id.as_deref().unwrap_or("");
         if window_id != own_window {
             let _ = tmux.select_window(&window_id);
-            // Auto-open a sidebar in the target window so the user sees it immediately.
-            self.ensure_sidebar_in_window(&window_id, Some(&pane_id));
+            // Only auto-open a sidebar when sticky is on; otherwise just navigate.
+            if self.sticky {
+                self.ensure_sidebar_in_window(&window_id, Some(&pane_id));
+            }
         }
         // Always land on the Claude pane (split-window steals focus, so this re-focuses it).
         let _ = tmux.select_pane(&pane_id);
@@ -920,6 +932,40 @@ impl App {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
+    }
+
+    /// Poll ccmux's own CPU% and RSS every 5 seconds using a single-PID ps call.
+    /// The call itself takes < 5 ms and runs at most once per 5 000 ms — negligible overhead.
+    pub fn tick_own_metrics(&mut self) -> bool {
+        if self.last_own_metrics_tick.elapsed() < Duration::from_secs(5) {
+            return false;
+        }
+        self.last_own_metrics_tick = Instant::now();
+        let pid = std::process::id();
+        let Ok(out) = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "pcpu=,rss="])
+            .output()
+        else { return false; };
+        let s = String::from_utf8_lossy(&out.stdout);
+        let parts: Vec<&str> = s.split_whitespace().collect();
+        if parts.len() >= 2 {
+            self.own_cpu_pct = parts[0].parse().unwrap_or(0.0);
+            let rss_kb: u64 = parts[1].parse().unwrap_or(0);
+            self.own_rss_mb = rss_kb as f32 / 1024.0;
+            if self.own_cpu_history.len() >= 30 { self.own_cpu_history.pop_front(); }
+            self.own_cpu_history.push_back(self.own_cpu_pct);
+            return true;
+        }
+        false
+    }
+
+    pub fn own_cpu_avg(&self) -> f32 {
+        if self.own_cpu_history.is_empty() { return 0.0; }
+        self.own_cpu_history.iter().sum::<f32>() / self.own_cpu_history.len() as f32
+    }
+
+    pub fn own_cpu_max(&self) -> f32 {
+        self.own_cpu_history.iter().cloned().fold(0.0_f32, f32::max)
     }
 
     fn write_vscode_color(path: &std::path::Path, hex: &str) {

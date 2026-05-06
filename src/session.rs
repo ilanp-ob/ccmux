@@ -77,4 +77,6 @@ pub struct WindowGroup {
     pub panes: Vec<DetectedPane>,
     /// Non-Claude, non-sidebar panes sharing this window (e.g. zsh, cargo, nvim).
     pub extra_panes: Vec<ExtraPane>,
+    /// Value of @ccmux_color on this window (e.g. "colour75"), if the user picked a color.
+    pub color_name: Option<String>,
 }

@@ -20,6 +20,79 @@ const SEL_BG: Color = Color::Rgb(42, 46, 54);
 const FOCUSED_BG: Color = Color::Rgb(18, 20, 26);
 const UNFOCUSED_BG: Color = Color::Rgb(26, 28, 34);
 
+// Cycling left-accent-bar colors — one per window group
+const GROUP_ACCENTS: &[Color] = &[
+    Color::Rgb(60,  80, 160),  // blue
+    Color::Rgb(50, 140,  70),  // green
+    Color::Rgb(160,  60,  60), // red
+    Color::Rgb(120,  50, 160), // purple
+    Color::Rgb(160, 120,  30), // gold
+    Color::Rgb(30,  140, 160), // teal
+];
+
+/// Convert an xterm-256 colour index to a ratatui RGB colour.
+fn xterm256_to_rgb(n: u8) -> Color {
+    match n {
+        0..=15 => {
+            const BASIC: [(u8, u8, u8); 16] = [
+                (0,0,0),(128,0,0),(0,128,0),(128,128,0),
+                (0,0,128),(128,0,128),(0,128,128),(192,192,192),
+                (128,128,128),(255,0,0),(0,255,0),(255,255,0),
+                (0,0,255),(255,0,255),(0,255,255),(255,255,255),
+            ];
+            let (r, g, b) = BASIC[n as usize];
+            Color::Rgb(r, g, b)
+        }
+        16..=231 => {
+            let idx = n - 16;
+            let bi = idx % 6;
+            let gi = (idx / 6) % 6;
+            let ri = idx / 36;
+            let v = |x: u8| if x == 0 { 0u8 } else { 55u8.saturating_add(x.saturating_mul(40)) };
+            Color::Rgb(v(ri), v(gi), v(bi))
+        }
+        232..=255 => {
+            let l = 8u8.saturating_add((n - 232).saturating_mul(10));
+            Color::Rgb(l, l, l)
+        }
+    }
+}
+
+/// Parse a tmux colour string ("colour75", "#61AFEF") into a ratatui Color.
+fn tmux_colour_to_ratatui(colour: &str) -> Option<Color> {
+    let s = colour.trim();
+    if let Some(rest) = s.strip_prefix("colour") {
+        rest.parse::<u8>().ok().map(xterm256_to_rgb)
+    } else if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some(Color::Rgb(r, g, b))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Render a ── Title ── separator line with INFO_BG background.
+fn titled_sep(title: &str, w: usize) -> Line<'static> {
+    const SEP_CLR: Color = Color::Rgb(45, 48, 58);
+    const TITLE_CLR: Color = Color::Rgb(85, 90, 110);
+    let label = format!(" {} ", title);
+    let label_w = label.chars().count();
+    let dashes = w.saturating_sub(label_w);
+    let left = dashes / 3;
+    let right = dashes - left;
+    Line::from(vec![
+        Span::styled("─".repeat(left), Style::default().fg(SEP_CLR).bg(INFO_BG)),
+        Span::styled(label, Style::default().fg(TITLE_CLR).bg(INFO_BG)),
+        Span::styled("─".repeat(right), Style::default().fg(SEP_CLR).bg(INFO_BG)),
+    ])
+}
+
 pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
@@ -43,6 +116,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Rename { .. } => 2,
         _ => 1,
     };
+    let metrics_h: u16 = match app.mode {
+        Mode::Normal | Mode::ActionHints => 2,
+        _ => 0,
+    };
     // top-title-sep + usage + mid-title-sep + mempalace + bottom-sep
     let info_h: u16 = if app.global_info.has_data() { 5 } else { 0 };
 
@@ -52,6 +129,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Constraint::Min(1),
             Constraint::Length(info_h),
             Constraint::Length(footer_h),
+            Constraint::Length(metrics_h),
         ])
         .split(inner);
 
@@ -60,6 +138,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         render_global_info(frame, app, chunks[1]);
     }
     render_footer(frame, app, chunks[2]);
+    if metrics_h > 0 {
+        render_own_metrics(frame, app, chunks[3]);
+    }
 
     if matches!(app.mode, Mode::Help) {
         render_help_overlay(frame, inner);
@@ -154,7 +235,8 @@ fn extract_preview_lines(content: &str, max_line_len: usize, max_lines: usize) -
 }
 
 fn is_shell_cmd(cmd: &str) -> bool {
-    matches!(cmd, "zsh" | "bash" | "fish" | "sh" | "dash" | "csh" | "tcsh" | "nu")
+    let name = cmd.rsplit('/').next().unwrap_or(cmd);
+    matches!(name, "zsh" | "bash" | "fish" | "sh" | "dash" | "csh" | "tcsh" | "nu")
 }
 
 fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) {
@@ -202,16 +284,24 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         /// Extra non-Claude panes in this window; rendered below the last Claude pane.
         /// Each entry is (path_display, optional_command). Command is None for idle shells.
         extra_panes: Vec<(String, Option<String>)>,
+        /// Left-accent-bar color assigned to this pane's window group.
+        accent: Color,
     }
-    enum Entry { Header(String), Item(RenderItem) }
+    enum Entry { Header { label: String, accent: Color, is_current: bool }, Item(RenderItem) }
 
     let mut entries: Vec<Entry> = Vec::new();
     let mut rows_used: usize = if scroll > 0 { 1 } else { 0 };
     let mut flat_idx = 0usize;
+    let mut group_idx = 0usize;
 
     'collect: for group in &app.groups {
-        let show_hdr = true; // always show window group header
+        let accent = group.color_name.as_deref()
+            .and_then(tmux_colour_to_ratatui)
+            .unwrap_or(GROUP_ACCENTS[group_idx % GROUP_ACCENTS.len()]);
+        group_idx += 1;
         let mut hdr_pushed = false;
+        let is_current_group = group.panes.first()
+            .map(|p| p.window_id == own_window).unwrap_or(false);
 
         let last_pane_idx_in_group = group.panes.len().saturating_sub(1);
 
@@ -220,12 +310,19 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             flat_idx += 1;
             if pane_idx < scroll { continue; }
 
-            if show_hdr && !hdr_pushed {
+            if !hdr_pushed {
                 if rows_used >= area_h { break 'collect; }
                 let win_idx = group.panes.first().map(|p| p.window_index.as_str()).unwrap_or("?");
                 let srv = group.server.as_deref()
                     .map(|s| format!(" [{}]", s)).unwrap_or_default();
-                entries.push(Entry::Header(format!("  win {}{}", win_idx, srv)));
+                let prefix = format!("  win {} ", win_idx);
+                let name_budget = inner_w.saturating_sub(prefix.len() + srv.len());
+                let win_name = truncate(&group.window_name, name_budget);
+                entries.push(Entry::Header {
+                    label: format!("{}{}{}", prefix, win_name, srv),
+                    accent,
+                    is_current: is_current_group,
+                });
                 rows_used += 1;
                 hdr_pushed = true;
             }
@@ -281,6 +378,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 path_short,
                 preview,
                 extra_panes,
+                accent,
             }));
         }
     }
@@ -319,9 +417,17 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
 
     for entry in &entries {
         match entry {
-            Entry::Header(label) => {
+            Entry::Header { label, accent, is_current } => {
+                // Strip one leading space — bar glyph takes that column.
+                let label_rest = if label.starts_with(' ') { &label[1..] } else { label.as_str() };
+                let bar = if *is_current {
+                    Span::styled("▶", Style::default().fg(*accent).bg(HDR_BG).add_modifier(Modifier::BOLD))
+                } else {
+                    Span::styled("▎", Style::default().fg(*accent).bg(HDR_BG))
+                };
                 lines.push(Line::from(vec![
-                    Span::styled(label.clone(), Style::default().fg(Color::Rgb(85, 90, 110)).bg(HDR_BG)),
+                    bar,
+                    Span::styled(label_rest.to_string(), Style::default().fg(*accent).bg(HDR_BG)),
                     Span::styled(" ".repeat(area_w), Style::default().bg(HDR_BG)),
                 ]));
             }
@@ -336,11 +442,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let base = Style::default().bg(row_bg);
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
-                let win_span = if item.is_cur {
-                    Span::styled("▶", sp(Color::Cyan))
-                } else {
-                    Span::styled(" ", base)
-                };
+                let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 let sel_span = if item.is_sel {
                     Span::styled("▌", sp(sc))
                 } else if is_alerted {
@@ -385,21 +487,24 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 };
 
                 // ── Line 2: branch ────────────────────────────────────────────
+                let bar2 = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if let Some(ref pipe) = cont_pipe {
                     lines.push(Line::from(vec![
-                        Span::styled(" ", base), pipe.clone(),
+                        bar2, pipe.clone(),
                         Span::styled(format!(" {}", item.branch),
                             sp(if item.is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })),
                         fill(),
                     ]).style(base));
                 } else {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("   {}", item.branch), sp(Color::Rgb(80, 90, 110))),
+                        bar2,
+                        Span::styled(format!("  {}", item.branch), sp(Color::Rgb(80, 90, 110))),
                         fill(),
                     ]).style(base));
                 }
 
                 // ── Line 3: path + status ─────────────────────────────────────
+                let bar3 = || Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if item.is_sel {
                     let status_label = match &item.status {
                         ClaudeCodeStatus::Working => "● Working",
@@ -408,36 +513,38 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         ClaudeCodeStatus::Unknown => "○ Unknown",
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(" ", base), Span::styled("▌", sp(sc)),
+                        bar3(), Span::styled("▌", sp(sc)),
                         Span::styled(format!(" {}  ", item.path_short), sp(Color::DarkGray)),
                         Span::styled(status_label, sp(sc)),
                         fill(),
                     ]).style(base));
                 } else if is_alerted {
                     lines.push(Line::from(vec![
-                        Span::styled(" ", base), Span::styled("▌", sp(ALERT_COLOR)),
+                        bar3(), Span::styled("▌", sp(ALERT_COLOR)),
                         Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(55, 58, 68))),
                         Span::styled("● Done", sp(ALERT_COLOR)),
                         fill(),
                     ]).style(base));
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     lines.push(Line::from(vec![
-                        Span::styled(" ", base), Span::styled("▌", sp(Color::Yellow)),
+                        bar3(), Span::styled("▌", sp(Color::Yellow)),
                         Span::styled(format!(" {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
                         fill(),
                     ]).style(base));
                 } else {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("   {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        bar3(),
+                        Span::styled(format!("  {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
                         fill(),
                     ]).style(base));
                 }
 
                 // ── Lines 4+: content preview ─────────────────────────────────
+                let bar4 = || Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if item.preview.is_empty() {
                     if item.is_sel {
                         lines.push(Line::from(vec![
-                            Span::styled(" ", base), Span::styled("▌", sp(sc)),
+                            bar4(), Span::styled("▌", sp(sc)),
                             Span::styled(" —", sp(Color::Rgb(70, 72, 85))),
                             fill(),
                         ]).style(base));
@@ -445,7 +552,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else if item.is_sel {
                     for pl in &item.preview {
                         lines.push(Line::from(vec![
-                            Span::styled(" ", base), Span::styled("▌", sp(sc)),
+                            bar4(), Span::styled("▌", sp(sc)),
                             Span::styled(format!(" {}", pl), sp(Color::Rgb(140, 145, 165))),
                             fill(),
                         ]).style(base));
@@ -454,36 +561,40 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     // Expanded non-selected: 1 dim preview line, no pipe
                     for pl in &item.preview {
                         lines.push(Line::from(vec![
-                            Span::styled(format!("   {}", pl), sp(Color::Rgb(75, 80, 100))),
+                            bar4(),
+                            Span::styled(format!("  {}", pl), sp(Color::Rgb(75, 80, 100))),
                             fill(),
                         ]).style(base));
                     }
                 }
 
                 // ── Extra (non-Claude) panes ──────────────────────────────────
+                let extra_bar = || Span::styled("▎", Style::default().fg(item.accent).bg(HDR_BG));
                 if !item.extra_panes.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        " ".repeat(area_w),
-                        Style::default().bg(HDR_BG),
-                    )));
+                    lines.push(Line::from(vec![
+                        extra_bar(),
+                        Span::styled(" ".repeat(area_w), Style::default().bg(HDR_BG)),
+                    ]));
                 }
                 for (path_display, cmd) in &item.extra_panes {
                     // Line 1: path (always)
                     let path_label = truncate(
-                        &format!("   · {}", path_display),
+                        &format!("  · {}", path_display),
                         inner_w.saturating_sub(1),
                     );
                     lines.push(Line::from(vec![
+                        Span::styled("▎", Style::default().fg(item.accent).bg(ROW_BG)),
                         Span::styled(path_label, Style::default().fg(Color::Rgb(60, 65, 82)).bg(ROW_BG)),
                         Span::styled(" ".repeat(area_w), Style::default().bg(ROW_BG)),
                     ]));
                     // Line 2: command (only when something real is running, not a bare shell)
                     if let Some(command) = cmd {
                         let cmd_label = truncate(
-                            &format!("     {}", command),
+                            &format!("    {}", command),
                             inner_w.saturating_sub(1),
                         );
                         lines.push(Line::from(vec![
+                            Span::styled("▎", Style::default().fg(item.accent).bg(ROW_BG)),
                             Span::styled(cmd_label, Style::default().fg(Color::Rgb(50, 55, 72)).bg(ROW_BG)),
                             Span::styled(" ".repeat(area_w), Style::default().bg(ROW_BG)),
                         ]));
@@ -556,19 +667,14 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
     let info_style = Style::default().bg(INFO_BG);
     let dim = |fg: Color| Style::default().fg(fg).bg(INFO_BG);
 
-    // Compute current time once for countdown/age calculations.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
 
-    // Row 0: separator
-    let sep_line = Line::from(Span::styled(
-        "─".repeat(area.width as usize),
-        dim(Color::Rgb(45, 48, 58)),
-    ));
+    let w = area.width as usize;
 
-    // Row 1: usage percentages with live reset countdowns
+    // Row 0: usage percentages with live reset countdowns
     let mut usage_spans = vec![Span::styled(" ", info_style)];
     if let Some(u5) = gi.usage_5h {
         let clr = usage_color(u5);
@@ -620,29 +726,13 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(mp_str, dim(mp_clr)),
     ]);
 
-    let w = area.width as usize;
-    let sep_clr = Color::Rgb(45, 48, 58);
-    let title_clr = Color::Rgb(85, 90, 110);
-
-    let titled_sep = |title: &str| -> Line {
-        let label = format!(" {} ", title);
-        let label_w = label.chars().count();
-        let dashes = w.saturating_sub(label_w);
-        let left = dashes / 3;
-        let right = dashes - left;
-        Line::from(vec![
-            Span::styled("─".repeat(left), dim(sep_clr)),
-            Span::styled(label, Style::default().fg(title_clr).bg(INFO_BG)),
-            Span::styled("─".repeat(right), dim(sep_clr)),
-        ])
-    };
     frame.render_widget(
         Paragraph::new(vec![
-            titled_sep("Claude usage"),
+            titled_sep("Claude usage", w),
             Line::from(usage_spans),
-            titled_sep("MemPalace"),
+            titled_sep("MemPalace", w),
             mp_line,
-            titled_sep("Shortcuts"),
+            titled_sep("Shortcuts", w),
         ]).style(info_style),
         area,
     );
@@ -753,6 +843,32 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::WorktreeFlow(_) => {}
         Mode::FolderPick(_) => {}
     }
+}
+
+fn render_own_metrics(frame: &mut Frame, app: &App, area: Rect) {
+    let w = area.width as usize;
+    let avg = app.own_cpu_avg();
+    let max_cpu = app.own_cpu_max();
+    let val_color = |v: f32| {
+        if v >= 10.0 { Color::Rgb(255, 100, 80) }
+        else if v >= 3.0 { Color::Rgb(255, 210, 80) }
+        else { Color::Rgb(100, 105, 125) }
+    };
+    let dim = Color::Rgb(55, 58, 72);
+    let info_style = Style::default().bg(INFO_BG);
+    let ds = |fg: Color| Style::default().fg(fg).bg(INFO_BG);
+    let data_line = Line::from(vec![
+        Span::styled("  cpu ", ds(dim)),
+        Span::styled(format!("avg {:.1}%", avg), ds(val_color(avg))),
+        Span::styled("  max ", ds(dim)),
+        Span::styled(format!("{:.1}%", max_cpu), ds(val_color(max_cpu))),
+        Span::styled("  │  ", ds(Color::Rgb(50, 53, 65))),
+        Span::styled(format!("{:.0} MB", app.own_rss_mb), ds(dim)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(vec![titled_sep("ccmux", w), data_line]).style(info_style),
+        area,
+    );
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
