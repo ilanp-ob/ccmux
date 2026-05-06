@@ -664,7 +664,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         cursor,
                     ]),
                     Line::from(vec![
-                        key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
+                        key("Enter"), hint(" confirm  "), key("Tab"), hint(" ✳ toggle  "), key("Esc"), hint(" cancel"),
                     ]),
                 ]),
                 area,
@@ -798,7 +798,7 @@ fn render_rename_overlay(frame: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::raw("  "),
-            key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
+            key("Enter"), hint(" confirm  "), key("Tab"), hint(" ✳ toggle  "), key("Esc"), hint(" cancel"),
         ]),
     ];
 

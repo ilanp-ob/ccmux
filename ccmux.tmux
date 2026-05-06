@@ -19,6 +19,19 @@ tmux bind-key "$close_key" run-shell -b "ccmux close"
 # cover the auto-open use case. window-focus-in fires on every iTerm2 click/focus
 # event and would block tmux even with run-shell, so we intentionally omit it here.
 
+# Replace "cc:" prefix with Claude symbol (✳) in window names set by Claude Code.
+# The hook fires on every window-renamed event; the case guard prevents an infinite loop.
+tmux set-hook -g window-renamed \
+  'run-shell -b "n=#{window_name}; case $n in cc:*) tmux rename-window -t #{window_id} \"✳ ${n#cc:}\";; esac"'
+
+# Rename any already-running cc: windows right now (e.g. after plugin reload).
+tmux list-windows -a -F "#{window_id}\t#{window_name}" 2>/dev/null | \
+  while IFS="$(printf '\t')" read -r wid wname; do
+    case "$wname" in
+      cc:*) tmux rename-window -t "$wid" "✳ ${wname#cc:}" ;;
+    esac
+  done
+
 # Check binary is available
 if ! command -v ccmux &>/dev/null; then
     tmux display-message "ccmux: binary not found. Run: cargo install ccmux"

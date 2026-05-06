@@ -69,7 +69,16 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Compose { text: String::new() };
         }
         KeyCode::Char('r') => {
-            app.mode = Mode::Rename { text: String::new() };
+            let prefill = app.selected_pane()
+                .map(|p| {
+                    if let Some(rest) = p.window_name.strip_prefix("cc:") {
+                        format!("✳ {}", rest)
+                    } else {
+                        p.window_name.clone()
+                    }
+                })
+                .unwrap_or_default();
+            app.mode = Mode::Rename { text: prefill };
         }
         KeyCode::Char('c') => {
             app.start_folder_pick();
@@ -179,6 +188,15 @@ fn handle_rename(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Normal;
+        }
+        KeyCode::Tab => {
+            const PREFIX: &str = "✳ ";
+            let new_text = if text.starts_with(PREFIX) {
+                text[PREFIX.len()..].to_string()
+            } else {
+                format!("{}{}", PREFIX, text)
+            };
+            app.mode = Mode::Rename { text: new_text };
         }
         KeyCode::Enter => {
             let t = text.clone();
