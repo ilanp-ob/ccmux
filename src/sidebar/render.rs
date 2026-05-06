@@ -751,14 +751,14 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     Line::from(vec![
                         key("i"), hint(" send"), sep(),
                         key("l"), hint(" actions"), sep(),
-                        key("w"), hint(" worktree"), sep(),
+                        key("w"), hint(" wt"), sep(),
                         key("c"), hint(" new"), sep(),
                         key("e"), hint(" edit"), sep(),
                         key("K"), hint(" kill"),
                     ]),
                     Line::from(vec![
                         key("s"), hint(" sticky"), sep(),
-                        key("o"), hint(" houston wt"), sep(),
+                        key("o"), hint(" houston"), sep(),
                         key("?"), hint(" help"), sep(),
                         key("q"), hint(" quit"),
                     ]),
