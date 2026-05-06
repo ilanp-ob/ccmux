@@ -9,11 +9,13 @@ toggle_key=$(tmux show-option -gv @ccmux-toggle-key 2>/dev/null || echo "C-c")
 close_key=$(tmux show-option -gv @ccmux-close-key 2>/dev/null || echo "M-c")
 notifications=$(tmux show-option -gv @ccmux-notifications 2>/dev/null || echo "on")
 
-# Claude window icon — Nerd Fonts robot  (U+F544) by default.
-# Override in ~/.tmux.conf:  set -g @ccmux-claude-icon "✳"   (plain-font fallback)
+# Claude window icon — configurable via @ccmux-claude-icon.
+# Default 🤖 emoji.  Override in ~/.tmux.conf if it causes alignment issues:
+#   set -g @ccmux-claude-icon "❊"   # U+274A propeller asterisk (Claude-logo feel)
+#   set -g @ccmux-claude-icon "✳"   # U+2733 plain fallback (any font)
 _ccmux_icon=$(tmux show-option -gv @ccmux-claude-icon 2>/dev/null)
 if [ -z "$_ccmux_icon" ]; then
-    _ccmux_icon=$''   # nf-fa-robot
+    _ccmux_icon="🤖"
 fi
 # Store in a tmux option so the hook can read it without quoting the glyph inline.
 tmux set-option -g @_ccmux_claude_icon "$_ccmux_icon"

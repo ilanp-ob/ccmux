@@ -69,8 +69,7 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Compose { text: String::new() };
         }
         KeyCode::Char('r') => {
-            // nf-fa-robot; matches @ccmux-claude-icon default in ccmux.tmux
-            const ICON: &str = "\u{F544}";
+            const ICON: &str = "\u{1F916}"; // 🤖
             let prefill = app.selected_pane()
                 .map(|p| {
                     if let Some(rest) = p.window_name.strip_prefix("cc:") {
@@ -192,7 +191,7 @@ fn handle_rename(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Normal;
         }
         KeyCode::Tab => {
-            const PREFIX: &str = "\u{F544} "; // nf-fa-robot
+            const PREFIX: &str = "\u{1F916} "; // 🤖
             let new_text = if text.starts_with(PREFIX) {
                 text[PREFIX.len()..].to_string()
             } else {
