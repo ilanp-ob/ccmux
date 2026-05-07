@@ -884,7 +884,7 @@ impl App {
                 return;
             }
 
-            if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch) {
+            if let Err(e) = crate::git::create_worktree(&repo_path, &worktree_path, branch, opts.base_branch.as_deref()) {
                 self.error = Some(format!("Worktree error: {}", e));
                 self.mode = crate::sidebar::mode::Mode::Normal;
                 return;

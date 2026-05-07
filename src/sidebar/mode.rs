@@ -48,7 +48,7 @@ pub enum WorktreeStep {
         new_branch_cursor: usize,
     },
     /// Edit the full worktree path (pre-filled alongside main repo; user can change it freely)
-    FolderName { repo_root: String, branch: String, folder: String, cursor: usize },
+    FolderName { repo_root: String, branch: String, folder: String, cursor: usize, base_branch: Option<String> },
     /// Choose launch options.
     /// `existing_wt_path` is set when the worktree already exists — skips `git worktree add`.
     Options {
@@ -69,8 +69,12 @@ pub struct WorktreeOpts {
     pub launch_claude: bool,
     pub color_idx: usize,
     pub open_vscode: bool,
-    /// Which field has focus: 0=model 1=effort 2=launch_claude 3=color 4=vscode
+    /// Which field has focus: 0=model 1=effort 2=launch_claude 3=color 4=vscode [5=base_branch if new]
     pub field: u8,
+    /// Set when creating a brand-new branch — the ref to fork from (e.g. "origin/main").
+    /// None for existing/remote-tracking branches.
+    pub base_branch: Option<String>,
+    pub base_branch_cursor: usize,
 }
 
 impl Default for WorktreeOpts {
@@ -82,6 +86,8 @@ impl Default for WorktreeOpts {
             color_idx: 0,
             open_vscode: false,
             field: 0,
+            base_branch: None,
+            base_branch_cursor: 0,
         }
     }
 }

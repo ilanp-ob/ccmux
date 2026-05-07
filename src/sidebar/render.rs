@@ -1295,8 +1295,9 @@ fn render_options_overlay(frame: &mut Frame, area: Rect, opts: &crate::sidebar::
     let (lc, vc) = field_style(2);
     let (lcol, vcol) = field_style(3);
     let (lv, vv) = field_style(4);
+    let (lb, vb) = field_style(5);
 
-    let lines: Vec<Line> = vec![
+    let mut lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled("  Model:   ", lm),
             Span::styled("◀ ", vm),
@@ -1323,11 +1324,18 @@ fn render_options_overlay(frame: &mut Frame, area: Rect, opts: &crate::sidebar::
             Span::styled("  VSCode:  ", lv),
             Span::styled(format!("{} Open VSCode", vscode_check), vv),
         ]),
-        Line::from(vec![
-            Span::raw("  "),
-            key("Tab"), hint(" next  "), key("◀▶"), hint(" cycle  "), key("Space"), hint(" toggle  "), key("Enter"), hint(" create"),
-        ]),
     ];
+
+    if let Some(base) = &opts.base_branch {
+        let mut base_spans = vec![Span::styled("  Base:    ", lb)];
+        base_spans.extend(text_with_cursor(base, opts.base_branch_cursor, vb, opts.field == 5));
+        lines.push(Line::from(base_spans));
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        key("Tab"), hint(" next  "), key("◀▶"), hint(" cycle  "), key("Space"), hint(" toggle  "), key("Enter"), hint(" create"),
+    ]));
 
     let overlay = overlay_rect(area, lines.len());
     frame.render_widget(Clear, overlay);

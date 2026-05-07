@@ -124,30 +124,64 @@ pub fn branch_to_folder(repo_root: &Path, branch: &str) -> String {
     format!("{}-{}", repo_name, safe)
 }
 
+/// Detect the default remote branch (e.g. "main", "master").
+/// Falls back to "main" if detection fails.
+pub fn default_branch(repo_root: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-C", &repo_root.to_string_lossy(),
+               "symbolic-ref", "refs/remotes/origin/HEAD"])
+        .output()
+        .ok();
+    out.and_then(|o| {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            s.strip_prefix("refs/remotes/origin/").map(|b| b.to_string())
+        } else {
+            None
+        }
+    })
+    .unwrap_or_else(|| "main".to_string())
+}
+
 /// Create a git worktree at `worktree_path` for `branch`.
-/// Creates a local tracking branch if the branch is remote-only.
-pub fn create_worktree(repo_root: &Path, worktree_path: &Path, branch: &str) -> Result<()> {
+///
+/// * `base_branch` = `Some("origin/main")` → brand-new branch, created with `-b`.
+/// * `base_branch` = `None` → existing or remote-tracking branch.
+pub fn create_worktree(
+    repo_root: &Path,
+    worktree_path: &Path,
+    branch: &str,
+    base_branch: Option<&str>,
+) -> Result<()> {
     let root_str = repo_root.to_string_lossy();
+    let wt_str   = worktree_path.to_string_lossy();
 
-    // Ensure local branch exists
-    let local_exists = std::process::Command::new("git")
-        .args(["-C", &root_str, "show-ref", "--verify", "--quiet",
-               &format!("refs/heads/{}", branch)])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let status = if let Some(base) = base_branch {
+        // New branch — create and checkout in one step.
+        std::process::Command::new("git")
+            .args(["-C", &root_str, "worktree", "add", "-b", branch, &wt_str, base])
+            .status()
+            .context("git worktree add -b")?
+    } else {
+        // Existing / remote-tracking branch — ensure a local branch exists first.
+        let local_exists = std::process::Command::new("git")
+            .args(["-C", &root_str, "show-ref", "--verify", "--quiet",
+                   &format!("refs/heads/{}", branch)])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
 
-    if !local_exists {
-        let _ = std::process::Command::new("git")
-            .args(["-C", &root_str, "branch", branch, &format!("origin/{}", branch)])
-            .status();
-    }
+        if !local_exists {
+            let _ = std::process::Command::new("git")
+                .args(["-C", &root_str, "branch", branch, &format!("origin/{}", branch)])
+                .status();
+        }
 
-    let status = std::process::Command::new("git")
-        .args(["-C", &root_str, "worktree", "add",
-               &worktree_path.to_string_lossy(), branch])
-        .status()
-        .context("git worktree add")?;
+        std::process::Command::new("git")
+            .args(["-C", &root_str, "worktree", "add", &wt_str, branch])
+            .status()
+            .context("git worktree add")?
+    };
 
     if !status.success() {
         anyhow::bail!("git worktree add failed");

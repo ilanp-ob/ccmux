@@ -373,8 +373,8 @@ fn handle_worktree(app: &mut App, key: KeyEvent) {
             );
         }
 
-        WorktreeStep::FolderName { repo_root, branch, folder, cursor } => {
-            handle_worktree_folder_name(app, key, repo_root, branch, folder, cursor);
+        WorktreeStep::FolderName { repo_root, branch, folder, cursor, base_branch } => {
+            handle_worktree_folder_name(app, key, repo_root, branch, folder, cursor, base_branch);
         }
 
         WorktreeStep::Options { repo_root, branch, folder, opts, existing_wt_path } => {
@@ -434,13 +434,13 @@ fn handle_worktree_branch_select(
         }
 
         KeyCode::Enter => {
-            let (branch, existing_wt) = if entering_new {
+            let (branch, existing_wt, is_new) = if entering_new {
                 if new_branch_text.is_empty() { return; }
-                (new_branch_text.clone(), None)
+                (new_branch_text.clone(), None, true)
             } else {
                 if filtered_len == 0 { return; }
                 let entry = filtered[cursor.min(filtered_len - 1)];
-                (entry.name.clone(), entry.worktree_path.clone())
+                (entry.name.clone(), entry.worktree_path.clone(), false)
             };
             let repo_path = std::path::PathBuf::from(&repo_root);
             if let Some(wt_path) = existing_wt {
@@ -455,12 +455,20 @@ fn handle_worktree_branch_select(
                 });
                 return;
             }
+            // For a new branch, detect the default remote branch as the base.
+            let base_branch = if is_new {
+                let base = crate::git::default_branch(&repo_path);
+                let full = format!("origin/{}", base);
+                Some(full)
+            } else {
+                None
+            };
             let folder_name = crate::git::branch_to_folder(&repo_path, &branch);
             let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
             let folder = parent.join(&folder_name).to_string_lossy().into_owned();
             let folder_cursor = folder.chars().count();
             app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
-                repo_root, branch, folder, cursor: folder_cursor,
+                repo_root, branch, folder, cursor: folder_cursor, base_branch,
             });
         }
 
@@ -490,20 +498,23 @@ fn handle_worktree_folder_name(
     branch: String,
     folder: String,
     cursor: usize,
+    base_branch: Option<String>,
 ) {
     match key.code {
         KeyCode::Esc   => { app.mode = Mode::Normal; }
         KeyCode::Enter => {
+            let base_branch_cursor = base_branch.as_deref().map(|b| b.chars().count()).unwrap_or(0);
+            let mut opts = crate::sidebar::mode::WorktreeOpts::default();
+            opts.base_branch = base_branch;
+            opts.base_branch_cursor = base_branch_cursor;
             app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
-                repo_root, branch, folder,
-                opts: crate::sidebar::mode::WorktreeOpts::default(),
-                existing_wt_path: None,
+                repo_root, branch, folder, opts, existing_wt_path: None,
             });
         }
         _ => {
             if let Some((new_f, new_c)) = apply_text_key(&folder, cursor, &key) {
                 app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
-                    repo_root, branch, folder: new_f, cursor: new_c,
+                    repo_root, branch, folder: new_f, cursor: new_c, base_branch,
                 });
             }
         }
@@ -529,20 +540,22 @@ fn handle_worktree_options(
         }) };
     }
 
+    let field_count: u8 = if opts.base_branch.is_some() { 6 } else { 5 };
+
     match key.code {
         KeyCode::Esc => { app.mode = Mode::Normal; }
         KeyCode::Enter => {
             app.execute_worktree(&repo_root, &branch, &folder, &opts, existing_wt_path.as_deref());
         }
         KeyCode::Tab => {
-            opts.field = (opts.field + 1) % 5;
+            opts.field = (opts.field + 1) % field_count;
             app.mode = back!();
         }
         KeyCode::BackTab => {
-            opts.field = if opts.field == 0 { 4 } else { opts.field - 1 };
+            opts.field = if opts.field == 0 { field_count - 1 } else { opts.field - 1 };
             app.mode = back!();
         }
-        KeyCode::Left => {
+        KeyCode::Left if opts.field != 5 => {
             match opts.field {
                 0 => opts.model_idx = if opts.model_idx == 0 { AVAILABLE_MODELS.len() - 1 } else { opts.model_idx - 1 },
                 1 => opts.effort_idx = if opts.effort_idx == 0 { AVAILABLE_EFFORTS.len() - 1 } else { opts.effort_idx - 1 },
@@ -551,7 +564,7 @@ fn handle_worktree_options(
             }
             app.mode = back!();
         }
-        KeyCode::Right => {
+        KeyCode::Right if opts.field != 5 => {
             match opts.field {
                 0 => opts.model_idx = (opts.model_idx + 1) % AVAILABLE_MODELS.len(),
                 1 => opts.effort_idx = (opts.effort_idx + 1) % AVAILABLE_EFFORTS.len(),
@@ -560,7 +573,7 @@ fn handle_worktree_options(
             }
             app.mode = back!();
         }
-        KeyCode::Char(' ') => {
+        KeyCode::Char(' ') if opts.field != 5 => {
             match opts.field {
                 2 => opts.launch_claude = !opts.launch_claude,
                 4 => opts.open_vscode = !opts.open_vscode,
@@ -568,7 +581,20 @@ fn handle_worktree_options(
             }
             app.mode = back!();
         }
-        _ => {}
+        _ => {
+            // Text editing for the base branch field (field 5).
+            if opts.field == 5 {
+                if let Some(base) = opts.base_branch.take() {
+                    if let Some((new_b, new_bc)) = apply_text_key(&base, opts.base_branch_cursor, &key) {
+                        opts.base_branch = Some(new_b);
+                        opts.base_branch_cursor = new_bc;
+                    } else {
+                        opts.base_branch = Some(base);
+                    }
+                    app.mode = back!();
+                }
+            }
+        }
     }
 }
 
