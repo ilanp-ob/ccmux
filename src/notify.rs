@@ -90,8 +90,8 @@ pub fn run(server: Option<String>) {
 }
 
 fn fire_notification(window_name: &str) {
-    // Try terminal-notifier first (has its own macOS notification permission).
-    // Fall back to osascript if not installed.
+    // Use terminal-notifier with Terminal.app as sender so macOS routes it through
+    // an app that already has notification permission. Fall back to osascript.
     let tn = which_terminal_notifier();
     if let Some(bin) = tn {
         let _ = std::process::Command::new(bin)
@@ -100,6 +100,7 @@ fn fire_notification(window_name: &str) {
                 "-subtitle", "Done — ready for input",
                 "-message", window_name,
                 "-group", "ccmux",
+                "-sender", "com.apple.Terminal",
             ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
