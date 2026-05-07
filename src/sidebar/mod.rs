@@ -608,9 +608,11 @@ impl App {
                         repo_root,
                         branches,
                         filter: String::new(),
+                        filter_cursor: 0,
                         cursor: 0,
                         entering_new: false,
                         new_branch_text: String::new(),
+                        new_branch_cursor: 0,
                     },
                 );
             }
@@ -640,7 +642,7 @@ impl App {
         let handle = self.folder_scan_handle.take().unwrap();
         let dirs = handle.join().unwrap_or_default();
         let root = self.folder_scan_root.take().unwrap_or_default();
-        self.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: String::new(), cursor: 0 });
+        self.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: String::new(), filter_cursor: 0, cursor: 0 });
         true
     }
 
