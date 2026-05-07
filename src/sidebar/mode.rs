@@ -12,11 +12,11 @@ pub enum Mode {
     /// Help overlay
     Help,
     /// Composing a free-text message to send to the selected Claude session
-    Compose { text: String },
+    Compose { text: String, cursor: usize },
     /// Creating a new plain tmux window
-    NewWindow { name: String, color_idx: usize, launch_claude: bool, field: u8 },
+    NewWindow { name: String, color_idx: usize, launch_claude: bool, field: u8, name_cursor: usize },
     /// Editing an existing window's name and color
-    EditWindow { window_id: String, name: String, color_idx: usize, field: u8 },
+    EditWindow { window_id: String, name: String, color_idx: usize, field: u8, name_cursor: usize },
     /// Multi-step worktree creation flow
     WorktreeFlow(WorktreeStep),
     /// Action menu for the selected pane (PR ops, delete worktree, …)
@@ -37,14 +37,18 @@ pub enum WorktreeStep {
         branches: Vec<BranchEntry>,
         /// Live filter string typed by the user
         filter: String,
+        /// Text cursor within `filter`
+        filter_cursor: usize,
         /// Cursor position in the filtered list
         cursor: usize,
         /// If true, user has selected "[New branch]" and is typing the name
         entering_new: bool,
         new_branch_text: String,
+        /// Text cursor within `new_branch_text`
+        new_branch_cursor: usize,
     },
     /// Edit the full worktree path (pre-filled alongside main repo; user can change it freely)
-    FolderName { repo_root: String, branch: String, folder: String },
+    FolderName { repo_root: String, branch: String, folder: String, cursor: usize },
     /// Choose launch options.
     /// `existing_wt_path` is set when the worktree already exists — skips `git worktree add`.
     Options {
@@ -93,6 +97,9 @@ pub enum FolderPickStep {
         root: std::path::PathBuf,
         dirs: Vec<std::path::PathBuf>,
         filter: String,
+        /// Text cursor within `filter`
+        filter_cursor: usize,
+        /// List selection cursor
         cursor: usize,
     },
     /// Confirm launch options before creating the window

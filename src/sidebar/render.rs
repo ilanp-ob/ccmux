@@ -30,6 +30,23 @@ const GROUP_ACCENTS: &[Color] = &[
     Color::Rgb(30,  140, 160), // teal
 ];
 
+/// Build spans for a text field showing a block cursor at `cursor` (char index).
+/// When `active` is false, returns a plain unstyled span.
+fn text_with_cursor(text: &str, cursor: usize, style: Style, active: bool) -> Vec<Span<'static>> {
+    if !active {
+        return vec![Span::styled(text.to_string(), style)];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let block = Span::styled("█", Style::default().fg(Color::Cyan));
+    if cursor >= chars.len() {
+        vec![Span::styled(text.to_string(), style), block]
+    } else {
+        let before: String = chars[..cursor].iter().collect();
+        let after: String = chars[cursor + 1..].iter().collect();
+        vec![Span::styled(before, style), block, Span::styled(after, style)]
+    }
+}
+
 /// Convert an xterm-256 colour index to a ratatui RGB colour.
 fn xterm256_to_rgb(n: u8) -> Color {
     match n {
@@ -782,15 +799,13 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 area,
             );
         }
-        Mode::Compose { text } => {
-            let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+        Mode::Compose { text, cursor } => {
+            let text_style = Style::default().fg(Color::White);
+            let mut spans = vec![Span::styled("› ", Style::default().fg(Color::Cyan))];
+            spans.extend(text_with_cursor(text.as_str(), *cursor, text_style, true));
             frame.render_widget(
                 Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled("› ", Style::default().fg(Color::Cyan)),
-                        Span::styled(text.as_str(), Style::default().fg(Color::White)),
-                        cursor,
-                    ]),
+                    Line::from(spans),
                     Line::from(vec![
                         key("Enter"), hint(" send  "), key("Esc"), hint(" cancel"),
                     ]),
@@ -949,8 +964,9 @@ fn overlay_rect(area: Rect, content_lines: usize) -> Rect {
 fn render_edit_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
     use crate::config::WINDOW_COLORS;
 
-    let (name, color_idx, field) = match &app.mode {
-        Mode::EditWindow { name, color_idx, field, .. } => (name.as_str(), *color_idx, *field),
+    let (name, color_idx, field, name_cursor) = match &app.mode {
+        Mode::EditWindow { name, color_idx, field, name_cursor, .. } =>
+            (name.as_str(), *color_idx, *field, *name_cursor),
         _ => return,
     };
 
@@ -964,22 +980,11 @@ fn render_edit_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
     let (label0, val0) = field_style(0);
     let (label1, val1) = field_style(1);
 
-    let name_spans: Vec<Span> = if field == 0 {
-        vec![
-            Span::styled("  Name:   ", label0),
-            Span::styled(name, val0),
-            cursor,
-        ]
-    } else {
-        vec![
-            Span::styled("  Name:   ", label0),
-            Span::styled(name, val0),
-        ]
-    };
+    let mut name_spans: Vec<Span> = vec![Span::styled("  Name:   ", label0)];
+    name_spans.extend(text_with_cursor(name, name_cursor, val0, field == 0));
 
     let lines: Vec<Line> = vec![
         Line::from(name_spans),
@@ -1011,9 +1016,9 @@ fn render_edit_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_new_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    let (name, color_idx, launch_claude, field) = match &app.mode {
-        Mode::NewWindow { name, color_idx, launch_claude, field } =>
-            (name.as_str(), *color_idx, *launch_claude, *field),
+    let (name, color_idx, launch_claude, field, name_cursor) = match &app.mode {
+        Mode::NewWindow { name, color_idx, launch_claude, field, name_cursor } =>
+            (name.as_str(), *color_idx, *launch_claude, *field, *name_cursor),
         _ => return,
     };
 
@@ -1034,24 +1039,12 @@ fn render_new_window_overlay(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
-
     let (label0, val0) = field_style(0);
     let (label1, val1) = field_style(1);
     let (label2, val2) = field_style(2);
 
-    let name_span: Vec<Span> = if field == 0 {
-        vec![
-            Span::styled("  Name:    ", label0),
-            Span::styled(name, val0),
-            cursor,
-        ]
-    } else {
-        vec![
-            Span::styled("  Name:    ", label0),
-            Span::styled(name, val0),
-        ]
-    };
+    let mut name_span: Vec<Span> = vec![Span::styled("  Name:    ", label0)];
+    name_span.extend(text_with_cursor(name, name_cursor, val0, field == 0));
 
     let lines: Vec<Line> = vec![
         Line::from(name_span),
@@ -1135,12 +1128,12 @@ fn render_worktree_overlay(frame: &mut Frame, app: &App, area: Rect) {
                 // Handled in render_footer; no overlay needed.
             }
             WorktreeStep::BranchSelect {
-                branches, filter, cursor, entering_new, new_branch_text, ..
+                branches, filter, filter_cursor, cursor, entering_new, new_branch_text, new_branch_cursor, ..
             } => {
-                render_branch_select_overlay(frame, area, branches, filter, *cursor, *entering_new, new_branch_text);
+                render_branch_select_overlay(frame, area, branches, filter, *filter_cursor, *cursor, *entering_new, new_branch_text, *new_branch_cursor);
             }
-            WorktreeStep::FolderName { folder, .. } => {
-                render_folder_name_overlay(frame, area, folder);
+            WorktreeStep::FolderName { folder, cursor, .. } => {
+                render_folder_name_overlay(frame, area, folder, *cursor);
             }
             WorktreeStep::Options { opts, .. } => {
                 render_options_overlay(frame, area, opts);
@@ -1171,33 +1164,28 @@ fn render_branch_select_overlay(
     area: Rect,
     branches: &[crate::git::BranchEntry],
     filter: &str,
+    filter_cursor: usize,
     cursor: usize,
     entering_new: bool,
     new_branch_text: &str,
+    new_branch_cursor: usize,
 ) {
-    // Use the full inner area for this overlay.
     let overlay = area;
-    let cursor_char = Span::styled("█", Style::default().fg(Color::Cyan));
-
+    let white = Style::default().fg(Color::White);
     let mut lines: Vec<Line> = Vec::new();
 
     if entering_new {
-        lines.push(Line::from(vec![
-            Span::styled("  New branch: ", Style::default().fg(Color::Cyan)),
-            Span::styled(new_branch_text, Style::default().fg(Color::White)),
-            cursor_char,
-        ]));
+        let mut spans = vec![Span::styled("  New branch: ", Style::default().fg(Color::Cyan))];
+        spans.extend(text_with_cursor(new_branch_text, new_branch_cursor, white, true));
+        lines.push(Line::from(spans));
         lines.push(Line::from(vec![
             Span::raw("  "),
             key("Enter"), hint(" create  "), key("Tab"), hint("/"), key("F"), hint(" existing  "), key("Esc"), hint(" cancel"),
         ]));
     } else {
-        // Filter line
-        lines.push(Line::from(vec![
-            Span::styled("  Filter: ", Style::default().fg(Color::Cyan)),
-            Span::styled(filter, Style::default().fg(Color::White)),
-            cursor_char,
-        ]));
+        let mut filter_spans = vec![Span::styled("  Filter: ", Style::default().fg(Color::Cyan))];
+        filter_spans.extend(text_with_cursor(filter, filter_cursor, white, true));
+        lines.push(Line::from(filter_spans));
 
         // Filtered branch list
         let filtered: Vec<&crate::git::BranchEntry> = branches.iter()
@@ -1257,14 +1245,11 @@ fn render_branch_select_overlay(
     );
 }
 
-fn render_folder_name_overlay(frame: &mut Frame, area: Rect, folder: &str) {
-    let cursor = Span::styled("█", Style::default().fg(Color::Cyan));
+fn render_folder_name_overlay(frame: &mut Frame, area: Rect, folder: &str, cursor: usize) {
+    let mut path_spans = vec![Span::styled("  Path: ", Style::default().fg(Color::Cyan))];
+    path_spans.extend(text_with_cursor(folder, cursor, Style::default().fg(Color::White), true));
     let lines: Vec<Line> = vec![
-        Line::from(vec![
-            Span::styled("  Path: ", Style::default().fg(Color::Cyan)),
-            Span::styled(folder, Style::default().fg(Color::White)),
-            cursor,
-        ]),
+        Line::from(path_spans),
         Line::from(vec![
             Span::raw("  "),
             key("Enter"), hint(" confirm  "), key("Esc"), hint(" cancel"),
@@ -1383,7 +1368,7 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
             let line = Line::from(Span::styled(" Scanning…", Style::default().fg(dim_clr)));
             frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), inner);
         }
-        Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor }) => {
+        Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, filter_cursor, cursor }) => {
             let h = inner.height as usize;
             if h < 3 { return; }
 
@@ -1396,11 +1381,9 @@ fn render_folder_pick_overlay(frame: &mut Frame, app: &App, area: Rect) {
             ]);
 
             // Row 1: filter input
-            let filter_line = Line::from(vec![
-                Span::styled(" > ", Style::default().fg(border_clr).bg(bg)),
-                Span::styled(filter.as_str(), Style::default().fg(Color::White).bg(bg)),
-                Span::styled("█", Style::default().fg(border_clr).bg(bg)),
-            ]);
+            let mut filter_spans = vec![Span::styled(" > ", Style::default().fg(border_clr).bg(bg))];
+            filter_spans.extend(text_with_cursor(filter.as_str(), *filter_cursor, Style::default().fg(Color::White).bg(bg), true));
+            let filter_line = Line::from(filter_spans);
 
             let list_h = h.saturating_sub(3); // root + filter + hint
             let filtered: Vec<&PathBuf> = dirs.iter()

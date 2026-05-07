@@ -1,7 +1,66 @@
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use super::{App, Mode};
 use super::mode::{WorktreeStep, FolderPickStep};
 use crate::config::WINDOW_COLORS;
+
+/// Handle a text-editing key for a field with an in-text cursor.
+/// Returns `Some((new_text, new_cursor))` if the key was consumed, `None` otherwise.
+/// Cursor is char-indexed. Does NOT handle Esc / Enter / Tab / mode-specific keys.
+fn apply_text_key(text: &str, cursor: usize, key: &KeyEvent) -> Option<(String, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let ctrl  = key.modifiers.contains(KeyModifiers::CONTROL);
+    let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
+
+    match key.code {
+        KeyCode::Left  if plain => Some((text.to_string(), cursor.saturating_sub(1))),
+        KeyCode::Right if plain => Some((text.to_string(), (cursor + 1).min(len))),
+        KeyCode::Home            => Some((text.to_string(), 0)),
+        KeyCode::End             => Some((text.to_string(), len)),
+        KeyCode::Char('a') if ctrl => Some((text.to_string(), 0)),
+        KeyCode::Char('e') if ctrl => Some((text.to_string(), len)),
+        KeyCode::Char('k') if ctrl => {
+            Some((chars[..cursor].iter().collect(), cursor))
+        }
+        KeyCode::Char('u') if ctrl => {
+            Some((chars[cursor..].iter().collect(), 0))
+        }
+        KeyCode::Char('w') if ctrl => {
+            // Delete word before cursor (like readline)
+            let trim = chars[..cursor].iter().rposition(|c| !c.is_whitespace()).map(|p| p + 1).unwrap_or(0);
+            let word_start = if trim > 0 {
+                chars[..trim].iter().rposition(|c| c.is_whitespace()).map(|p| p + 1).unwrap_or(0)
+            } else { 0 };
+            let mut new: Vec<char> = chars[..word_start].to_vec();
+            new.extend_from_slice(&chars[cursor..]);
+            Some((new.iter().collect(), word_start))
+        }
+        KeyCode::Delete if plain => {
+            if cursor < len {
+                let mut new = chars.clone();
+                new.remove(cursor);
+                Some((new.iter().collect(), cursor))
+            } else {
+                Some((text.to_string(), cursor))
+            }
+        }
+        KeyCode::Backspace => {
+            if cursor > 0 {
+                let mut new = chars.clone();
+                new.remove(cursor - 1);
+                Some((new.iter().collect(), cursor - 1))
+            } else {
+                Some((text.to_string(), cursor))
+            }
+        }
+        KeyCode::Char(c) if plain => {
+            let mut new = chars.clone();
+            new.insert(cursor, c);
+            Some((new.iter().collect(), cursor + 1))
+        }
+        _ => None,
+    }
+}
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     // Don't clear messages while composing — let the user see what they're doing
@@ -67,18 +126,19 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('s') => app.toggle_sticky(),
         KeyCode::Char('i') => {
-            app.mode = Mode::Compose { text: String::new() };
+            app.mode = Mode::Compose { text: String::new(), cursor: 0 };
         }
         KeyCode::Char('e') => {
             if let Some(pane) = app.selected_pane() {
                 let window_id = pane.window_id.clone();
                 let name = pane.window_name.clone();
+                let name_cursor = name.chars().count();
                 let color_idx = app.groups.iter()
                     .find(|g| g.window_id == window_id)
                     .and_then(|g| g.color_name.as_deref())
                     .and_then(|c| WINDOW_COLORS.iter().position(|(_, _, tc)| *tc == c))
                     .unwrap_or(0);
-                app.mode = Mode::EditWindow { window_id, name, color_idx, field: 0 };
+                app.mode = Mode::EditWindow { window_id, name, color_idx, field: 0, name_cursor };
             }
         }
         KeyCode::Char('c') => {
@@ -154,82 +214,67 @@ fn handle_help(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_compose(app: &mut App, key: KeyEvent) {
-    let text = match &app.mode {
-        Mode::Compose { text } => text.clone(),
+    let (text, cursor) = match &app.mode {
+        Mode::Compose { text, cursor } => (text.clone(), *cursor),
         _ => return,
     };
     match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
+        KeyCode::Esc   => { app.mode = Mode::Normal; }
+        KeyCode::Enter => { app.send_message(&text); app.mode = Mode::Normal; }
+        _ => {
+            if let Some((new_text, new_cursor)) = apply_text_key(&text, cursor, &key) {
+                app.mode = Mode::Compose { text: new_text, cursor: new_cursor };
+            }
         }
-        KeyCode::Enter => {
-            let t = text.clone();
-            app.send_message(&t);
-            app.mode = Mode::Normal;
-        }
-        KeyCode::Backspace => {
-            let mut t = text;
-            t.pop();
-            app.mode = Mode::Compose { text: t };
-        }
-        KeyCode::Char(c) => {
-            let mut t = text;
-            t.push(c);
-            app.mode = Mode::Compose { text: t };
-        }
-        _ => {}
     }
 }
 
 fn handle_edit_window(app: &mut App, key: KeyEvent) {
-    let (window_id, name, color_idx, field) = match &app.mode {
-        Mode::EditWindow { window_id, name, color_idx, field } =>
-            (window_id.clone(), name.clone(), *color_idx, *field),
+    let (window_id, name, color_idx, field, name_cursor) = match &app.mode {
+        Mode::EditWindow { window_id, name, color_idx, field, name_cursor } =>
+            (window_id.clone(), name.clone(), *color_idx, *field, *name_cursor),
         _ => return,
     };
 
+    macro_rules! set {
+        ($name:expr, $nc:expr, $ci:expr, $f:expr) => {
+            app.mode = Mode::EditWindow {
+                window_id: window_id.clone(), name: $name,
+                color_idx: $ci, field: $f, name_cursor: $nc,
+            }
+        };
+    }
+
     match key.code {
-        KeyCode::Esc => { app.mode = Mode::Normal; }
-        KeyCode::Enter => {
-            let wid = window_id.clone();
-            let n = name.clone();
-            app.execute_edit_window(&wid, &n, color_idx);
-        }
-        KeyCode::Tab => {
-            let new_field = (field + 1) % 2;
-            app.mode = Mode::EditWindow { window_id, name, color_idx, field: new_field };
-        }
-        KeyCode::BackTab => {
-            let new_field = if field == 0 { 1 } else { 0 };
-            app.mode = Mode::EditWindow { window_id, name, color_idx, field: new_field };
-        }
-        KeyCode::Backspace if field == 0 => {
-            let mut n = name;
-            n.pop();
-            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
-        }
-        // Ctrl+B toggles the 🤖 prefix on the name field
-        KeyCode::Char('b') if field == 0 && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+        KeyCode::Esc   => { app.mode = Mode::Normal; }
+        KeyCode::Enter => { app.execute_edit_window(&window_id, &name, color_idx); }
+        KeyCode::Tab    => { set!(name, name_cursor, color_idx, (field + 1) % 2); }
+        KeyCode::BackTab => { set!(name, name_cursor, color_idx, if field == 0 { 1 } else { 0 }); }
+        // Ctrl+B toggles 🤖 prefix; adjust cursor to stay at same logical position
+        KeyCode::Char('b') if field == 0 && key.modifiers.contains(KeyModifiers::CONTROL) => {
             const BOT: &str = "\u{1F916} ";
-            let n = if name.starts_with(BOT) {
-                name[BOT.len()..].to_string()
+            const BOT_LEN: usize = 2; // 🤖 (1 char) + space (1 char)
+            let (n, nc) = if name.starts_with(BOT) {
+                let stripped = name[BOT.len()..].to_string();
+                (stripped, name_cursor.saturating_sub(BOT_LEN))
             } else {
-                format!("{}{}", BOT, name)
+                (format!("{}{}", BOT, name), name_cursor + BOT_LEN)
             };
-            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
+            set!(n, nc, color_idx, field);
         }
-        KeyCode::Char(c) if field == 0 => {
-            let mut n = name;
-            n.push(c);
-            app.mode = Mode::EditWindow { window_id, name: n, color_idx, field };
-        }
+        // Color field navigation
         KeyCode::Left if field == 1 => {
             let new_idx = if color_idx == 0 { WINDOW_COLORS.len() - 1 } else { color_idx - 1 };
-            app.mode = Mode::EditWindow { window_id, name, color_idx: new_idx, field };
+            set!(name, name_cursor, new_idx, field);
         }
         KeyCode::Right if field == 1 => {
-            let new_idx = (color_idx + 1) % WINDOW_COLORS.len();
-            app.mode = Mode::EditWindow { window_id, name, color_idx: new_idx, field };
+            set!(name, name_cursor, (color_idx + 1) % WINDOW_COLORS.len(), field);
+        }
+        // Text editing on name field
+        _ if field == 0 => {
+            if let Some((new_name, new_nc)) = apply_text_key(&name, name_cursor, &key) {
+                set!(new_name, new_nc, color_idx, field);
+            }
         }
         _ => {}
     }
@@ -238,51 +283,40 @@ fn handle_edit_window(app: &mut App, key: KeyEvent) {
 fn handle_new_window(app: &mut App, key: KeyEvent) {
     use crate::config::WINDOW_COLORS;
 
-    // Extract current state
-    let (name, color_idx, launch_claude, field) = match &app.mode {
-        Mode::NewWindow { name, color_idx, launch_claude, field } => {
-            (name.clone(), *color_idx, *launch_claude, *field)
-        }
+    let (name, color_idx, launch_claude, field, name_cursor) = match &app.mode {
+        Mode::NewWindow { name, color_idx, launch_claude, field, name_cursor } =>
+            (name.clone(), *color_idx, *launch_claude, *field, *name_cursor),
         _ => return,
     };
 
+    macro_rules! set {
+        ($name:expr, $nc:expr, $ci:expr, $lc:expr, $f:expr) => {
+            app.mode = Mode::NewWindow {
+                name: $name, color_idx: $ci,
+                launch_claude: $lc, field: $f, name_cursor: $nc,
+            }
+        };
+    }
+
     match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-        }
-        KeyCode::Enter => {
-            app.execute_new_window(&name, color_idx, launch_claude);
-        }
-        KeyCode::Tab => {
-            // Advance field: 0→1→2→0
-            let new_field = (field + 1) % 3;
-            app.mode = Mode::NewWindow { name, color_idx, launch_claude, field: new_field };
-        }
-        KeyCode::BackTab => {
-            // Retreat field: 0→2→1→0
-            let new_field = if field == 0 { 2 } else { field - 1 };
-            app.mode = Mode::NewWindow { name, color_idx, launch_claude, field: new_field };
-        }
-        KeyCode::Backspace if field == 0 => {
-            let mut n = name;
-            n.pop();
-            app.mode = Mode::NewWindow { name: n, color_idx, launch_claude, field };
-        }
-        KeyCode::Char(c) if field == 0 => {
-            let mut n = name;
-            n.push(c);
-            app.mode = Mode::NewWindow { name: n, color_idx, launch_claude, field };
-        }
+        KeyCode::Esc   => { app.mode = Mode::Normal; }
+        KeyCode::Enter => { app.execute_new_window(&name, color_idx, launch_claude); }
+        KeyCode::Tab    => { set!(name, name_cursor, color_idx, launch_claude, (field + 1) % 3); }
+        KeyCode::BackTab => { set!(name, name_cursor, color_idx, launch_claude, if field == 0 { 2 } else { field - 1 }); }
         KeyCode::Left if field == 1 => {
             let new_idx = if color_idx == 0 { WINDOW_COLORS.len() - 1 } else { color_idx - 1 };
-            app.mode = Mode::NewWindow { name, color_idx: new_idx, launch_claude, field };
+            set!(name, name_cursor, new_idx, launch_claude, field);
         }
         KeyCode::Right if field == 1 => {
-            let new_idx = (color_idx + 1) % WINDOW_COLORS.len();
-            app.mode = Mode::NewWindow { name, color_idx: new_idx, launch_claude, field };
+            set!(name, name_cursor, (color_idx + 1) % WINDOW_COLORS.len(), launch_claude, field);
         }
         KeyCode::Char(' ') if field == 2 => {
-            app.mode = Mode::NewWindow { name, color_idx, launch_claude: !launch_claude, field };
+            set!(name, name_cursor, color_idx, !launch_claude, field);
+        }
+        _ if field == 0 => {
+            if let Some((new_name, new_nc)) = apply_text_key(&name, name_cursor, &key) {
+                set!(new_name, new_nc, color_idx, launch_claude, field);
+            }
         }
         _ => {}
     }
@@ -331,16 +365,16 @@ fn handle_worktree(app: &mut App, key: KeyEvent) {
         }
 
         WorktreeStep::BranchSelect {
-            repo_root, branches, filter, cursor, entering_new, new_branch_text,
+            repo_root, branches, filter, filter_cursor, cursor, entering_new, new_branch_text, new_branch_cursor,
         } => {
             handle_worktree_branch_select(
                 app, key,
-                repo_root, branches, filter, cursor, entering_new, new_branch_text,
+                repo_root, branches, filter, filter_cursor, cursor, entering_new, new_branch_text, new_branch_cursor,
             );
         }
 
-        WorktreeStep::FolderName { repo_root, branch, folder } => {
-            handle_worktree_folder_name(app, key, repo_root, branch, folder);
+        WorktreeStep::FolderName { repo_root, branch, folder, cursor } => {
+            handle_worktree_folder_name(app, key, repo_root, branch, folder, cursor);
         }
 
         WorktreeStep::Options { repo_root, branch, folder, opts, existing_wt_path } => {
@@ -361,89 +395,42 @@ fn handle_worktree_branch_select(
     repo_root: String,
     branches: Vec<crate::git::BranchEntry>,
     filter: String,
+    filter_cursor: usize,
     cursor: usize,
     entering_new: bool,
     new_branch_text: String,
+    new_branch_cursor: usize,
 ) {
     let filtered: Vec<&crate::git::BranchEntry> = branches.iter()
         .filter(|b| b.name.to_lowercase().contains(&filter.to_lowercase()))
         .collect();
     let filtered_len = filtered.len();
 
+    macro_rules! set {
+        ($f:expr, $fc:expr, $c:expr, $en:expr, $nbt:expr, $nbc:expr) => {
+            app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
+                repo_root: repo_root.clone(), branches: branches.clone(),
+                filter: $f, filter_cursor: $fc, cursor: $c,
+                entering_new: $en, new_branch_text: $nbt, new_branch_cursor: $nbc,
+            })
+        };
+    }
+
     match key.code {
-        KeyCode::Esc => {
-            app.mode = Mode::Normal;
-        }
+        KeyCode::Esc => { app.mode = Mode::Normal; }
 
-        // F or Tab toggles entering_new
         KeyCode::Char('F') | KeyCode::Tab => {
-            app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                repo_root,
-                branches,
-                filter,
-                cursor,
-                entering_new: !entering_new,
-                new_branch_text,
-            });
+            set!(filter, filter_cursor, cursor, !entering_new, new_branch_text, new_branch_cursor);
         }
 
-        KeyCode::Up | KeyCode::Char('k') => {
-            let new_cursor = if cursor == 0 {
-                filtered_len.saturating_sub(1)
-            } else {
-                cursor - 1
-            };
-            app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                repo_root, branches, filter, cursor: new_cursor, entering_new, new_branch_text,
-            });
+        KeyCode::Up | KeyCode::Char('k') if !entering_new => {
+            let nc = if cursor == 0 { filtered_len.saturating_sub(1) } else { cursor - 1 };
+            set!(filter, filter_cursor, nc, entering_new, new_branch_text, new_branch_cursor);
         }
 
-        KeyCode::Down | KeyCode::Char('j') => {
-            let new_cursor = if filtered_len == 0 {
-                0
-            } else {
-                (cursor + 1) % filtered_len
-            };
-            app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                repo_root, branches, filter, cursor: new_cursor, entering_new, new_branch_text,
-            });
-        }
-
-        KeyCode::Backspace => {
-            if entering_new {
-                let mut t = new_branch_text;
-                t.pop();
-                app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                    repo_root, branches, filter, cursor, entering_new, new_branch_text: t,
-                });
-            } else {
-                let mut f = filter;
-                f.pop();
-                app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                    repo_root, branches, filter: f, cursor, entering_new, new_branch_text,
-                });
-            }
-        }
-
-        KeyCode::Char(c) => {
-            if entering_new {
-                let mut t = new_branch_text;
-                t.push(c);
-                app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                    repo_root, branches, filter, cursor, entering_new, new_branch_text: t,
-                });
-            } else {
-                let mut f = filter;
-                f.push(c);
-                // Re-filter and clamp cursor
-                let new_filtered_len = branches.iter()
-                    .filter(|b| b.name.to_lowercase().contains(&f.to_lowercase()))
-                    .count();
-                let new_cursor = if new_filtered_len == 0 { 0 } else { cursor.min(new_filtered_len - 1) };
-                app.mode = Mode::WorktreeFlow(WorktreeStep::BranchSelect {
-                    repo_root, branches, filter: f, cursor: new_cursor, entering_new, new_branch_text,
-                });
-            }
+        KeyCode::Down | KeyCode::Char('j') if !entering_new => {
+            let nc = if filtered_len == 0 { 0 } else { (cursor + 1) % filtered_len };
+            set!(filter, filter_cursor, nc, entering_new, new_branch_text, new_branch_cursor);
         }
 
         KeyCode::Enter => {
@@ -455,37 +442,44 @@ fn handle_worktree_branch_select(
                 let entry = filtered[cursor.min(filtered_len - 1)];
                 (entry.name.clone(), entry.worktree_path.clone())
             };
-
             let repo_path = std::path::PathBuf::from(&repo_root);
-
             if let Some(wt_path) = existing_wt {
-                // Worktree exists — skip FolderName but still show Options so the
-                // user can choose to launch Claude, open VS Code, etc.
                 let folder = std::path::Path::new(&wt_path)
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| branch.clone());
                 app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
-                    repo_root,
-                    branch,
-                    folder,
+                    repo_root, branch, folder,
                     opts: crate::sidebar::mode::WorktreeOpts::default(),
                     existing_wt_path: Some(wt_path),
                 });
                 return;
             }
-
             let folder_name = crate::git::branch_to_folder(&repo_path, &branch);
             let parent = repo_path.parent().unwrap_or(&repo_path).to_path_buf();
             let folder = parent.join(&folder_name).to_string_lossy().into_owned();
+            let folder_cursor = folder.chars().count();
             app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
-                repo_root,
-                branch,
-                folder,
+                repo_root, branch, folder, cursor: folder_cursor,
             });
         }
 
-        _ => {}
+        _ => {
+            if entering_new {
+                if let Some((new_t, new_nc)) = apply_text_key(&new_branch_text, new_branch_cursor, &key) {
+                    set!(filter, filter_cursor, cursor, entering_new, new_t, new_nc);
+                }
+            } else {
+                if let Some((new_f, new_fc)) = apply_text_key(&filter, filter_cursor, &key) {
+                    // Re-clamp list cursor after filter change
+                    let new_len = branches.iter()
+                        .filter(|b| b.name.to_lowercase().contains(&new_f.to_lowercase()))
+                        .count();
+                    let new_c = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
+                    set!(new_f, new_fc, new_c, entering_new, new_branch_text, new_branch_cursor);
+                }
+            }
+        }
     }
 }
 
@@ -495,36 +489,24 @@ fn handle_worktree_folder_name(
     repo_root: String,
     branch: String,
     folder: String,
+    cursor: usize,
 ) {
     match key.code {
-        KeyCode::Esc => {
-            // Go back to Normal; branches will be re-fetched on next 'w'
-            app.mode = Mode::Normal;
-        }
-        KeyCode::Backspace => {
-            let mut f = folder;
-            f.pop();
-            app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
-                repo_root, branch, folder: f,
-            });
-        }
-        KeyCode::Char(c) => {
-            let mut f = folder;
-            f.push(c);
-            app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
-                repo_root, branch, folder: f,
-            });
-        }
+        KeyCode::Esc   => { app.mode = Mode::Normal; }
         KeyCode::Enter => {
             app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
-                repo_root,
-                branch,
-                folder,
+                repo_root, branch, folder,
                 opts: crate::sidebar::mode::WorktreeOpts::default(),
                 existing_wt_path: None,
             });
         }
-        _ => {}
+        _ => {
+            if let Some((new_f, new_c)) = apply_text_key(&folder, cursor, &key) {
+                app.mode = Mode::WorktreeFlow(WorktreeStep::FolderName {
+                    repo_root, branch, folder: new_f, cursor: new_c,
+                });
+            }
+        }
     }
 }
 
@@ -653,7 +635,7 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                 _ => {}
             }
         }
-        FolderPickStep::Picking { root, dirs, filter, cursor } => {
+        FolderPickStep::Picking { root, dirs, filter, filter_cursor, cursor } => {
             let filtered: Vec<&PathBuf> = dirs.iter()
                 .filter(|d| d.file_name()
                     .map(|n| n.to_string_lossy().to_lowercase().contains(&filter.to_lowercase()))
@@ -662,28 +644,35 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
             let filtered_len = filtered.len();
             let clamped = if filtered_len == 0 { 0 } else { cursor.min(filtered_len - 1) };
 
+            macro_rules! set_pick {
+                ($f:expr, $fc:expr, $c:expr) => {
+                    app.mode = Mode::FolderPick(FolderPickStep::Picking {
+                        root: root.clone(), dirs: dirs.clone(),
+                        filter: $f, filter_cursor: $fc, cursor: $c,
+                    })
+                };
+            }
+
             match key.code {
                 KeyCode::Esc => { app.mode = Mode::Normal; }
 
                 KeyCode::Up | KeyCode::Char('k') => {
-                    let new_cursor = if cursor == 0 { filtered_len.saturating_sub(1) } else { cursor - 1 };
-                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor: new_cursor });
+                    let nc = if cursor == 0 { filtered_len.saturating_sub(1) } else { cursor - 1 };
+                    set_pick!(filter, filter_cursor, nc);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let new_cursor = if filtered_len == 0 { 0 } else { (cursor + 1) % filtered_len };
-                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter, cursor: new_cursor });
+                    let nc = if filtered_len == 0 { 0 } else { (cursor + 1) % filtered_len };
+                    set_pick!(filter, filter_cursor, nc);
                 }
                 KeyCode::Enter => {
                     if let Some(path) = filtered.get(clamped) {
                         app.mode = Mode::FolderPick(FolderPickStep::Options {
-                            path: (*path).clone(),
-                            is_new: false,
+                            path: (*path).clone(), is_new: false,
                             opts: crate::sidebar::mode::WorktreeOpts::default(),
                         });
                     } else if !filter.is_empty() {
                         app.mode = Mode::FolderPick(FolderPickStep::Options {
-                            path: root.join(&filter),
-                            is_new: true,
+                            path: root.join(&filter), is_new: true,
                             opts: crate::sidebar::mode::WorktreeOpts::default(),
                         });
                     }
@@ -693,35 +682,20 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                         app.navigate_folder_into((*path).clone());
                     }
                 }
-                KeyCode::Left => {
-                    app.navigate_folder_up();
+                // Left / Backspace-on-empty → navigate up (not text editing)
+                KeyCode::Left => { app.navigate_folder_up(); }
+                KeyCode::Backspace if filter.is_empty() => { app.navigate_folder_up(); }
+                _ => {
+                    if let Some((new_f, new_fc)) = apply_text_key(&filter, filter_cursor, &key) {
+                        let new_len = dirs.iter()
+                            .filter(|d| d.file_name()
+                                .map(|n| n.to_string_lossy().to_lowercase().contains(&new_f.to_lowercase()))
+                                .unwrap_or(false))
+                            .count();
+                        let new_c = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
+                        set_pick!(new_f, new_fc, new_c);
+                    }
                 }
-                KeyCode::Backspace if filter.is_empty() => {
-                    app.navigate_folder_up();
-                }
-                KeyCode::Backspace => {
-                    let mut f = filter;
-                    f.pop();
-                    let new_len = dirs.iter()
-                        .filter(|d| d.file_name()
-                            .map(|n| n.to_string_lossy().to_lowercase().contains(&f.to_lowercase()))
-                            .unwrap_or(false))
-                        .count();
-                    let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
-                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: f, cursor: new_cursor });
-                }
-                KeyCode::Char(c) => {
-                    let mut f = filter;
-                    f.push(c);
-                    let new_len = dirs.iter()
-                        .filter(|d| d.file_name()
-                            .map(|n| n.to_string_lossy().to_lowercase().contains(&f.to_lowercase()))
-                            .unwrap_or(false))
-                        .count();
-                    let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len.saturating_sub(1)) };
-                    app.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: f, cursor: new_cursor });
-                }
-                _ => {}
             }
         }
     }
