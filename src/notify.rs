@@ -90,8 +90,16 @@ pub fn run(server: Option<String>) {
 }
 
 fn fire_notification(window_name: &str) {
-    // Use terminal-notifier with Terminal.app as sender so macOS routes it through
-    // an app that already has notification permission. Fall back to osascript.
+    // Play a sound — works without any notification permissions.
+    let _ = std::process::Command::new("afplay")
+        .arg("/System/Library/Sounds/Glass.aiff")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    // Best-effort banner via terminal-notifier (may be silently ignored by macOS
+    // permission model, but the sound above guarantees audible feedback).
     let tn = which_terminal_notifier();
     if let Some(bin) = tn {
         let _ = std::process::Command::new(bin)
@@ -99,13 +107,12 @@ fn fire_notification(window_name: &str) {
                 "-title", "ccmux",
                 "-subtitle", "Done — ready for input",
                 "-message", window_name,
-                "-group", "ccmux",
-                "-sender", "com.apple.Terminal",
+                "-sender", "com.googlecode.iterm2",
             ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status();
+            .spawn();
     } else {
         let script = format!(
             "display notification {:?} with title \"ccmux\" subtitle \"Done — ready for input\"",
@@ -113,7 +120,10 @@ fn fire_notification(window_name: &str) {
         );
         let _ = std::process::Command::new("osascript")
             .args(["-e", &script])
-            .status();
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
 }
 
