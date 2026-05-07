@@ -90,7 +90,19 @@ pub fn run(server: Option<String>) {
 }
 
 fn fire_notification(window_name: &str) {
-    // Play a sound — works without any notification permissions.
+    // Preferred: use the bundled ccmux-notify.app which has real UNUserNotificationCenter
+    // permission and reliably shows banners on macOS 14+/26+.
+    if let Some(helper) = notify_helper_path() {
+        let _ = std::process::Command::new(&helper)
+            .args(["ccmux", "Done — ready for input", window_name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        return;
+    }
+
+    // Fallback: audible sound (no permission required).
     let _ = std::process::Command::new("afplay")
         .arg("/System/Library/Sounds/Glass.aiff")
         .stdin(std::process::Stdio::null())
@@ -98,10 +110,8 @@ fn fire_notification(window_name: &str) {
         .stderr(std::process::Stdio::null())
         .spawn();
 
-    // Best-effort banner via terminal-notifier (may be silently ignored by macOS
-    // permission model, but the sound above guarantees audible feedback).
-    let tn = which_terminal_notifier();
-    if let Some(bin) = tn {
+    // Best-effort visual banner — may be silently ignored on macOS 26 for CLI tools.
+    if let Some(bin) = which_terminal_notifier() {
         let _ = std::process::Command::new(bin)
             .args([
                 "-title", "ccmux",
@@ -127,6 +137,18 @@ fn fire_notification(window_name: &str) {
     }
 }
 
+/// Returns the path to the ccmux-notify binary inside the installed .app bundle,
+/// if the bundle has been installed via helpers/install-notify-helper.sh.
+fn notify_helper_path() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{}/.local/share/ccmux/ccmux-notify.app/Contents/MacOS/ccmux-notify", home);
+    if std::path::Path::new(&path).exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 fn which_terminal_notifier() -> Option<String> {
     for candidate in &[
         "/opt/homebrew/bin/terminal-notifier",
@@ -136,7 +158,6 @@ fn which_terminal_notifier() -> Option<String> {
             return Some(candidate.to_string());
         }
     }
-    // Also try PATH
     if std::process::Command::new("which")
         .arg("terminal-notifier")
         .output()
