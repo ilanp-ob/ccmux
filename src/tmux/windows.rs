@@ -20,6 +20,10 @@ impl Tmux {
             .output()
             .context("tmux new-window failed")?;
         let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Lock the name so automatic-rename doesn't overwrite it.
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", &window_id, "automatic-rename", "off"])
+            .status();
         // Explicit cd to handle any working-dir race
         let cd_cmd = format!("cd '{}'", path_str.replace('\'', "'\\''"));
         let _ = self.cmd()
@@ -84,12 +88,15 @@ impl Tmux {
         Ok(())
     }
 
-    /// Rename a window.
+    /// Rename a window and lock the name against automatic-rename.
     pub fn rename_window(&self, window_id: &str, new_name: &str) -> Result<()> {
         self.cmd()
             .args(["rename-window", "-t", window_id, new_name])
             .status()
             .context("tmux rename-window failed")?;
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", window_id, "automatic-rename", "off"])
+            .status();
         Ok(())
     }
 
