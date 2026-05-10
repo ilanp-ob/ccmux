@@ -453,7 +453,16 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let icon = item.status.icon();
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
                 const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
-                let row_bg: Color = if item.is_sel { SEL_BG } else { ROW_BG };
+                let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
+                let row_bg: Color = if item.is_sel {
+                    SEL_BG
+                } else if is_alerted {
+                    Color::Rgb(38, 22, 10)
+                } else if item.status == ClaudeCodeStatus::WaitingInput {
+                    Color::Rgb(30, 28, 10)
+                } else {
+                    ROW_BG
+                };
 
                 let sp = |fg: Color| Style::default().fg(fg).bg(row_bg);
                 let base = Style::default().bg(row_bg);
@@ -476,7 +485,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else {
                     Color::White
                 };
-                let name_mod = if item.is_sel || item.is_cur { Modifier::BOLD } else { Modifier::empty() };
+                let name_mod = if item.is_sel || item.is_cur || needs_attention { Modifier::BOLD } else { Modifier::empty() };
                 let left_len = 2 + 1 + icon.chars().count() + 1 + item.name.chars().count();
                 let pad = area_w.saturating_sub(left_len + item.num_str.len());
 
@@ -545,7 +554,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     lines.push(Line::from(vec![
                         bar3(), Span::styled("▌", sp(Color::Yellow)),
-                        Span::styled(format!(" {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(80, 78, 40))),
+                        Span::styled("⚠ Waiting", sp(Color::Yellow)),
                         fill(),
                     ]).style(base));
                 } else {
