@@ -7,16 +7,16 @@ use crate::session::ClaudeCodeStatus;
 /// the last few lines so code/text that *mentions* these phrases mid-output
 /// (e.g. a code diff displaying the detection source itself) doesn't trigger.
 fn is_waiting_for_input(content: &str) -> bool {
-    // Legacy shell-style prompts — these are usually on a single line at the
-    // bottom so full-content scan is fine; they're rarely in Claude output text.
-    if content.contains("[y/n]") || content.contains("[Y/n]") {
-        return true;
-    }
-    // Only scan the tail of the capture for Claude's dialog footer phrases.
-    // Actual dialogs appear at the bottom; scrollback content (including code
-    // that contains these strings as literals) is higher up.
+    // All checks are tail-only: Claude's dialog footers always appear at the
+    // bottom of the terminal. Scanning the full capture causes false positives
+    // when Claude displays code that contains these exact string literals
+    // (e.g. a diff of detection.rs itself showing `[y/n]` or the footer phrases).
     let tail: Vec<&str> = content.lines().rev().take(6).collect();
     let tail_text = tail.join("\n");
+
+    if tail_text.contains("[y/n]") || tail_text.contains("[Y/n]") {
+        return true;
+    }
     if tail_text.contains("Tab to amend · ctrl+e to explain") {
         return true;
     }
