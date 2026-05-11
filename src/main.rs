@@ -378,20 +378,27 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
     tmux.select_window(&window_id)?;
     tmux.select_pane(&pane_id)?;
 
-    // Always open (or reuse) a sidebar in the target window when jumping via shortcut.
-    let binary = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "ccmux".to_string());
-    let auto_open_cmd = match &server {
-        Some(s) => format!("{} auto-open --window {} --server {}", binary, window_id, s),
-        None    => format!("{} auto-open --window {}", binary, window_id),
-    };
-    let _ = std::process::Command::new("sh")
-        .args(["-c", &auto_open_cmd])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    // Always open (or reuse) a sidebar in the target window when jumping via shortcut,
+    // regardless of sticky setting.  Skip if sidebar already alive.
+    let var_key = format!("@ccmux_sidebar_{}_{}", session, window_id);
+    let sidebar_alive = tmux.get_var(&var_key)
+        .map(|pid| tmux.pane_exists(&pid))
+        .unwrap_or(false);
+
+    if !sidebar_alive {
+        let binary = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "ccmux".to_string());
+        let sidebar_cmd = match &server {
+            Some(s) => format!("{} sidebar --server {}", binary, s),
+            None    => format!("{} sidebar", binary),
+        };
+        if let Ok(new_pane) = tmux.split_sidebar(&window_id, config.sidebar.width, &sidebar_cmd) {
+            let _ = tmux.set_var(&var_key, &new_pane);
+        }
+        // Return focus to the Claude pane.
+        let _ = tmux.select_pane(&pane_id);
+    }
 
     Ok(())
 }
