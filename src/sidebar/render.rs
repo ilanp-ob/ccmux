@@ -456,14 +456,14 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
                 let blink = app.blink_phase && needs_attention && !item.is_sel;
 
-                // Blink: "on" phase uses a vivid solid background so the row flashes
-                // unmissably; "off" phase uses a subtle tint so the row is still visible.
+                // Background tint for attention rows; blink_phase drives a color pulse
+                // but the primary attention signal is now native SLOW_BLINK on the name.
                 let row_bg: Color = if item.is_sel {
                     SEL_BG
                 } else if is_alerted {
-                    if blink { Color::Rgb(160, 55, 0) } else { Color::Rgb(38, 22, 10) }
+                    if blink { Color::Rgb(120, 45, 5) } else { Color::Rgb(38, 22, 10) }
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    if blink { Color::Rgb(110, 100, 0) } else { Color::Rgb(30, 28, 10) }
+                    if blink { Color::Rgb(90, 80, 5) } else { Color::Rgb(30, 28, 10) }
                 } else {
                     ROW_BG
                 };
@@ -473,9 +473,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
                 let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
-                // On the bright phase use near-white text so it pops against the vivid bg.
-                let alert_fg = if blink { Color::Rgb(255, 220, 180) } else { ALERT_COLOR };
-                let wait_fg  = if blink { Color::Rgb(255, 250, 180) } else { Color::Yellow };
+                let alert_fg = ALERT_COLOR;
+                let wait_fg  = Color::Yellow;
                 let sel_span = if item.is_sel {
                     Span::styled("▌", sp(sc))
                 } else if is_alerted {
@@ -492,7 +491,14 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else {
                     Color::White
                 };
-                let name_mod = if item.is_sel || item.is_cur || needs_attention { Modifier::BOLD } else { Modifier::empty() };
+                // Native terminal blink on the name when attention needed and not selected.
+                let name_mod = if needs_attention && !item.is_sel {
+                    Modifier::BOLD | Modifier::SLOW_BLINK
+                } else if item.is_sel || item.is_cur {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                };
                 let left_len = 2 + 1 + icon.chars().count() + 1 + item.name.chars().count();
                 let pad = area_w.saturating_sub(left_len + item.num_str.len());
 
