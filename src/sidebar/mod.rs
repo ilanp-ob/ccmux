@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::config::Config;
-use crate::detection::{detect_static_status, detect_status};
+use crate::detection::{detect_changed_status, detect_static_status, detect_status};
 use crate::session::{ClaudeCodeStatus, DetectedPane, WindowGroup};
 use crate::tmux::Tmux;
 
@@ -409,10 +409,11 @@ impl App {
 
             let new_status = if let Some(prev) = self.pane_content_cache.get(pane_id) {
                 if &content != prev {
-                    // Content changed — WaitingInput takes priority even here:
-                    // Claude's cursor animation can keep content "changing" while
-                    // a confirmation dialog is fully visible.
-                    detect_status(&content)
+                    // Content changed — Working is the safe default; only override
+                    // to WaitingInput if a confirmation dialog is visible.
+                    // (Calling full detect_status here caused Idle false-positives
+                    // when Claude is working but ctrl+c hint isn't in the capture.)
+                    detect_changed_status(&content)
                 } else {
                     detect_static_status(&content)
                 }

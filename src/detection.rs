@@ -23,10 +23,18 @@ fn is_waiting_for_input(content: &str) -> bool {
     false
 }
 
-/// Detect Claude Code status from pane content snapshot.
+/// Status when content has CHANGED since last tick.
+/// Safe assumption is Working; only override if a confirmation dialog is visible.
+pub fn detect_changed_status(content: &str) -> ClaudeCodeStatus {
+    if is_waiting_for_input(content) {
+        ClaudeCodeStatus::WaitingInput
+    } else {
+        ClaudeCodeStatus::Working
+    }
+}
+
+/// Detect Claude Code status from pane content snapshot (first-seen pane only).
 pub fn detect_status(content: &str) -> ClaudeCodeStatus {
-    // Confirmation dialogs take priority — user must respond regardless of
-    // whether a background tool is also running.
     if is_waiting_for_input(content) {
         return ClaudeCodeStatus::WaitingInput;
     }
@@ -117,9 +125,15 @@ mod tests {
 
     #[test]
     fn working_when_content_changes_and_no_dialog() {
-        // Plain working output with ctrl+c hint — should be Working, not Unknown
         let content = "* Processing files…\n(ctrl+c to interrupt)";
-        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+        assert_eq!(detect_changed_status(content), ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn changed_content_with_spinner_is_working() {
+        // Spinner "· Concocting…" with no ctrl+c hint — still Working when content changes
+        let content = "· Concocting… (1m 25s · ↓ 3.1k tokens)\n─────\n❯";
+        assert_eq!(detect_changed_status(content), ClaudeCodeStatus::Working);
     }
 
     #[test]
