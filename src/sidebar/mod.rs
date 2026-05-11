@@ -409,7 +409,10 @@ impl App {
 
             let new_status = if let Some(prev) = self.pane_content_cache.get(pane_id) {
                 if &content != prev {
-                    ClaudeCodeStatus::Working
+                    // Content changed — WaitingInput takes priority even here:
+                    // Claude's cursor animation can keep content "changing" while
+                    // a confirmation dialog is fully visible.
+                    detect_status(&content)
                 } else {
                     detect_static_status(&content)
                 }
