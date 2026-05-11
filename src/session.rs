@@ -3,6 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaudeCodeStatus {
     Working,
+    Thinking,
     WaitingInput,
     Idle,
     Unknown,
@@ -12,6 +13,7 @@ impl ClaudeCodeStatus {
     pub fn icon(&self) -> &'static str {
         match self {
             Self::Working => "●",
+            Self::Thinking => "✻",
             Self::WaitingInput => "◐",
             Self::Idle => "○",
             Self::Unknown => "?",

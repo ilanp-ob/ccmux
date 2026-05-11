@@ -26,11 +26,25 @@ fn is_waiting_for_input(content: &str) -> bool {
     false
 }
 
+/// Returns true when Claude's extended-thinking spinner is visible.
+/// Claude always renders it as "[ornament] Thinking…" with the Unicode
+/// ellipsis (U+2026), on its own line near the bottom of the terminal.
+fn is_thinking(content: &str) -> bool {
+    content.lines().rev().take(20).any(|line| {
+        let t = line.trim();
+        // Must end with "Thinking…" (Unicode ellipsis, not "...")
+        t.ends_with("Thinking\u{2026}") && t.len() > "Thinking\u{2026}".len()
+    })
+}
+
 /// Status when content has CHANGED since last tick.
-/// Safe assumption is Working; only override if a confirmation dialog is visible.
+/// Safe assumption is Working; only override if a confirmation dialog or
+/// extended-thinking spinner is visible.
 pub fn detect_changed_status(content: &str) -> ClaudeCodeStatus {
     if is_waiting_for_input(content) {
         ClaudeCodeStatus::WaitingInput
+    } else if is_thinking(content) {
+        ClaudeCodeStatus::Thinking
     } else {
         ClaudeCodeStatus::Working
     }
@@ -52,10 +66,12 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
 }
 
 /// Detect status when content has NOT changed since last check.
-/// Only distinguishes WaitingInput from Idle (Working is determined externally).
 pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
     if is_waiting_for_input(content) {
         return ClaudeCodeStatus::WaitingInput;
+    }
+    if is_thinking(content) {
+        return ClaudeCodeStatus::Thinking;
     }
     if has_input_field(content) {
         return ClaudeCodeStatus::Idle;

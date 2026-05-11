@@ -62,7 +62,7 @@ pub fn run(server: Option<String>) {
 
             // Notify when Claude finishes working (→ Idle) or hits a mid-task prompt (→ WaitingInput).
             // Require that the previous state was Working so we don't spam on startup.
-            let was_busy = prev == ClaudeCodeStatus::Working;
+            let was_busy = matches!(prev, ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking);
             let now_needs_attention = matches!(new_status,
                 ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
 

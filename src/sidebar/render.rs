@@ -557,6 +557,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 if is_sel {
                     let status_label = match &item.status {
                         ClaudeCodeStatus::Working => "● Working",
+                        ClaudeCodeStatus::Thinking => "✻ Thinking",
                         ClaudeCodeStatus::WaitingInput => "⚠ Waiting",
                         ClaudeCodeStatus::Idle => "○ Idle",
                         ClaudeCodeStatus::Unknown => "○ Unknown",
@@ -1624,6 +1625,7 @@ fn read_git_branch(path: &std::path::Path) -> Option<String> {
 fn status_color(status: &ClaudeCodeStatus) -> Color {
     match status {
         ClaudeCodeStatus::Working => Color::Green,
+        ClaudeCodeStatus::Thinking => Color::Rgb(160, 100, 220), // purple
         ClaudeCodeStatus::WaitingInput => Color::Yellow,
         ClaudeCodeStatus::Idle => Color::Cyan,
         ClaudeCodeStatus::Unknown => Color::DarkGray,
