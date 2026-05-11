@@ -446,7 +446,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     // Filled block + bold accent — much more visible than a thin ▶.
                     Span::styled("▌▶", Style::default().fg(*accent).bg(hdr_bg).add_modifier(Modifier::BOLD))
                 } else {
-                    Span::styled(" ▎", Style::default().fg(*accent).bg(hdr_bg))
+                    Span::styled("▎ ", Style::default().fg(*accent).bg(hdr_bg))
                 };
                 lines.push(Line::from(vec![
                     bar,
@@ -494,17 +494,17 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else {
                     Span::styled(" ", base)
                 };
-                let name_fg = if !item.is_sel && is_alerted {
+                let name_fg = if !is_sel && is_alerted {
                     alert_fg
-                } else if !item.is_sel && item.status == ClaudeCodeStatus::WaitingInput {
+                } else if !is_sel && item.status == ClaudeCodeStatus::WaitingInput {
                     wait_fg
                 } else {
                     Color::White
                 };
                 // Native terminal blink on the name when attention needed and not selected.
-                let name_mod = if needs_attention && !item.is_sel {
+                let name_mod = if needs_attention && !is_sel {
                     Modifier::BOLD | Modifier::SLOW_BLINK
-                } else if item.is_sel || item.is_cur {
+                } else if is_sel || item.is_cur {
                     Modifier::BOLD
                 } else {
                     Modifier::empty()
@@ -525,7 +525,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     fill(),
                 ]).style(base));
 
-                let cont_pipe: Option<Span> = if item.is_sel {
+                let cont_pipe: Option<Span> = if is_sel {
                     Some(Span::styled("▌", sp(sc)))
                 } else if is_alerted {
                     Some(Span::styled("▌", sp(alert_fg)))
@@ -541,7 +541,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     lines.push(Line::from(vec![
                         bar2, pipe.clone(),
                         Span::styled(format!(" {}", item.branch),
-                            sp(if item.is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })),
+                            sp(if is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })),
                         fill(),
                     ]).style(base));
                 } else {
@@ -554,7 +554,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
 
                 // ── Line 3: path + status ─────────────────────────────────────
                 let bar3 = || Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
-                if item.is_sel {
+                if is_sel {
                     let status_label = match &item.status {
                         ClaudeCodeStatus::Working => "● Working",
                         ClaudeCodeStatus::WaitingInput => "⚠ Waiting",
@@ -592,14 +592,14 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 // ── Lines 4+: content preview ─────────────────────────────────
                 let bar4 = || Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if item.preview.is_empty() {
-                    if item.is_sel {
+                    if is_sel {
                         lines.push(Line::from(vec![
                             bar4(), Span::styled("▌", sp(sc)),
                             Span::styled(" —", sp(Color::Rgb(70, 72, 85))),
                             fill(),
                         ]).style(base));
                     }
-                } else if item.is_sel {
+                } else if is_sel {
                     for pl in &item.preview {
                         lines.push(Line::from(vec![
                             bar4(), Span::styled("▌", sp(sc)),
