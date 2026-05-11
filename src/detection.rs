@@ -3,20 +3,24 @@ use crate::session::ClaudeCodeStatus;
 /// Returns true when the pane content shows a Claude confirmation/permission
 /// dialog that requires the user to respond before Claude can continue.
 ///
-/// Uses tight, Claude-CLI-specific footer phrases to avoid false positives from
-/// those phrases appearing in normal conversation or code output.
+/// Dialog footers always render at the bottom of the terminal. We only check
+/// the last few lines so code/text that *mentions* these phrases mid-output
+/// (e.g. a code diff displaying the detection source itself) doesn't trigger.
 fn is_waiting_for_input(content: &str) -> bool {
-    // Legacy shell-style prompts
+    // Legacy shell-style prompts — these are usually on a single line at the
+    // bottom so full-content scan is fine; they're rarely in Claude output text.
     if content.contains("[y/n]") || content.contains("[Y/n]") {
         return true;
     }
-    // Tool-approval footer exact combined phrase — the · separators make this
-    // specific enough that it won't appear in Claude's own text output.
-    if content.contains("Tab to amend · ctrl+e to explain") {
+    // Only scan the tail of the capture for Claude's dialog footer phrases.
+    // Actual dialogs appear at the bottom; scrollback content (including code
+    // that contains these strings as literals) is higher up.
+    let tail: Vec<&str> = content.lines().rev().take(6).collect();
+    let tail_text = tail.join("\n");
+    if tail_text.contains("Tab to amend · ctrl+e to explain") {
         return true;
     }
-    // Numbered-selection dialog footer combined phrase.
-    if content.contains("Enter to select · ↑/↓ to navigate") {
+    if tail_text.contains("Enter to select · ↑/↓ to navigate") {
         return true;
     }
     false
