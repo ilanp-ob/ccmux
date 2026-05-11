@@ -378,23 +378,20 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
     tmux.select_window(&window_id)?;
     tmux.select_pane(&pane_id)?;
 
-    // If sticky, open a sidebar in the target window (same as the hook does,
-    // but driven directly so there's no timing race with pane_current_command).
-    if tmux.get_var("@ccmux_sticky").as_deref() == Some("1") {
-        let binary = std::env::current_exe()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| "ccmux".to_string());
-        let auto_open_cmd = match &server {
-            Some(s) => format!("{} auto-open --window {} --server {}", binary, window_id, s),
-            None    => format!("{} auto-open --window {}", binary, window_id),
-        };
-        let _ = std::process::Command::new("sh")
-            .args(["-c", &auto_open_cmd])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
+    // Always open (or reuse) a sidebar in the target window when jumping via shortcut.
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+    let auto_open_cmd = match &server {
+        Some(s) => format!("{} auto-open --window {} --server {}", binary, window_id, s),
+        None    => format!("{} auto-open --window {}", binary, window_id),
+    };
+    let _ = std::process::Command::new("sh")
+        .args(["-c", &auto_open_cmd])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 
     Ok(())
 }

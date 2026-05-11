@@ -456,13 +456,14 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
                 let blink = app.blink_phase && needs_attention && !item.is_sel;
 
-                // Blink: alternate between a bright and dim background every 500 ms.
+                // Blink: "on" phase uses a vivid solid background so the row flashes
+                // unmissably; "off" phase uses a subtle tint so the row is still visible.
                 let row_bg: Color = if item.is_sel {
                     SEL_BG
                 } else if is_alerted {
-                    if blink { Color::Rgb(80, 35, 5) } else { Color::Rgb(38, 22, 10) }
+                    if blink { Color::Rgb(160, 55, 0) } else { Color::Rgb(38, 22, 10) }
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    if blink { Color::Rgb(65, 60, 5) } else { Color::Rgb(30, 28, 10) }
+                    if blink { Color::Rgb(110, 100, 0) } else { Color::Rgb(30, 28, 10) }
                 } else {
                     ROW_BG
                 };
@@ -472,8 +473,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
                 let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
-                let alert_fg = if blink { Color::Rgb(255, 160, 60) } else { ALERT_COLOR };
-                let wait_fg  = if blink { Color::Rgb(255, 230, 60) } else { Color::Yellow };
+                // On the bright phase use near-white text so it pops against the vivid bg.
+                let alert_fg = if blink { Color::Rgb(255, 220, 180) } else { ALERT_COLOR };
+                let wait_fg  = if blink { Color::Rgb(255, 250, 180) } else { Color::Yellow };
                 let sel_span = if item.is_sel {
                     Span::styled("▌", sp(sc))
                 } else if is_alerted {
