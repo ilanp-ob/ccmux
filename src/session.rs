@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+/// Spinner frames cycled by Claude Code's processing animation, in order.
+pub const THINKING_FRAMES: &[&str] = &["·", "✻", "✽", "✶", "✳", "✢"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaudeCodeStatus {
     Working,

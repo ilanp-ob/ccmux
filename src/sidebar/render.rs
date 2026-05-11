@@ -291,6 +291,8 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         pane_idx: usize,
         window_id: String,
         status: ClaudeCodeStatus,
+        /// Pre-computed icon string — animated spinner frame for Thinking, static otherwise.
+        icon: &'static str,
         is_sel: bool,
         is_cur: bool,
         name: String,
@@ -383,11 +385,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             let path_max = if is_sel { inner_w.saturating_sub(12) } else { inner_w.saturating_sub(1) };
             let path_short = truncate(&shorten_path(&pane.current_path), path_max);
 
+            let icon = if pane.status == ClaudeCodeStatus::Thinking {
+                crate::session::THINKING_FRAMES[app.thinking_frame % crate::session::THINKING_FRAMES.len()]
+            } else {
+                pane.status.icon()
+            };
+
             entries.push(Entry::Item(RenderItem {
                 pane_id: pane.pane_id.clone(),
                 pane_idx,
                 window_id: pane.window_id.clone(),
                 status: pane.status.clone(),
+                icon,
                 is_sel, is_cur,
                 name: name_short,
                 num_str,
@@ -458,7 +467,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
             }
             Entry::Item(item) => {
                 let sc = status_color(&item.status);
-                let icon = item.status.icon();
+                let icon = item.icon;
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
                 const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
@@ -556,11 +565,11 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let bar3 = || Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if is_sel {
                     let status_label = match &item.status {
-                        ClaudeCodeStatus::Working => "● Working",
-                        ClaudeCodeStatus::Thinking => "✻ Thinking",
-                        ClaudeCodeStatus::WaitingInput => "⚠ Waiting",
-                        ClaudeCodeStatus::Idle => "○ Idle",
-                        ClaudeCodeStatus::Unknown => "○ Unknown",
+                        ClaudeCodeStatus::Working => "● Working".to_string(),
+                        ClaudeCodeStatus::Thinking => format!("{} Thinking", item.icon),
+                        ClaudeCodeStatus::WaitingInput => "⚠ Waiting".to_string(),
+                        ClaudeCodeStatus::Idle => "○ Idle".to_string(),
+                        ClaudeCodeStatus::Unknown => "○ Unknown".to_string(),
                     };
                     lines.push(Line::from(vec![
                         bar3(), Span::styled("▌", sp(sc)),

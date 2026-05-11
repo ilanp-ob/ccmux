@@ -26,14 +26,27 @@ fn is_waiting_for_input(content: &str) -> bool {
     false
 }
 
-/// Returns true when Claude's extended-thinking spinner is visible.
-/// Claude always renders it as "[ornament] Thinking…" with the Unicode
-/// ellipsis (U+2026), on its own line near the bottom of the terminal.
+/// Returns true when Claude's thinking/processing spinner is visible near the bottom of
+/// the terminal. Covers the standard spinner animation (·, ✻, ✽, ✶, ✳, ✢ at line start)
+/// as well as extended-thinking mode which renders "[ornament] Thinking…".
 fn is_thinking(content: &str) -> bool {
+    const SPINNERS: &[char] = &[
+        '\u{00B7}', // · middle dot
+        '\u{273B}', // ✻ teardrop-spoked asterisk
+        '\u{273D}', // ✽ heavy teardrop-spoked asterisk
+        '\u{2736}', // ✶ six-pointed black star
+        '\u{2733}', // ✳ eight-spoked asterisk
+        '\u{2722}', // ✢ four balloon-spoked asterisk
+    ];
     content.lines().rev().take(20).any(|line| {
         let t = line.trim();
-        // Must end with "Thinking…" (Unicode ellipsis, not "...")
-        t.ends_with("Thinking\u{2026}") && t.len() > "Thinking\u{2026}".len()
+        // Extended thinking mode: "[ornament] Thinking…" (Unicode ellipsis U+2026)
+        if t.ends_with("Thinking\u{2026}") && t.len() > "Thinking\u{2026}".len() {
+            return true;
+        }
+        // Standard spinner: ornament char followed immediately by a space
+        let mut chars = t.chars();
+        matches!(chars.next(), Some(c) if SPINNERS.contains(&c)) && chars.next() == Some(' ')
     })
 }
 
@@ -54,6 +67,9 @@ pub fn detect_changed_status(content: &str) -> ClaudeCodeStatus {
 pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     if is_waiting_for_input(content) {
         return ClaudeCodeStatus::WaitingInput;
+    }
+    if is_thinking(content) {
+        return ClaudeCodeStatus::Thinking;
     }
     let working = content.contains("ctrl+c") && content.contains("to interrupt");
     if has_input_field(content) {
@@ -155,10 +171,30 @@ mod tests {
     }
 
     #[test]
-    fn changed_content_with_spinner_is_working() {
-        // Spinner "· Concocting…" with no ctrl+c hint — still Working when content changes
+    fn changed_content_with_spinner_is_thinking() {
         let content = "· Concocting… (1m 25s · ↓ 3.1k tokens)\n─────\n❯";
-        assert_eq!(detect_changed_status(content), ClaudeCodeStatus::Working);
+        assert_eq!(detect_changed_status(content), ClaudeCodeStatus::Thinking);
+    }
+
+    #[test]
+    fn static_content_with_spinner_is_thinking() {
+        let content = "✻ Reading file…\n─────\n❯";
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::Thinking);
+    }
+
+    #[test]
+    fn first_seen_spinner_is_thinking() {
+        let content = "✶ Working…\n─────\n❯";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Thinking);
+    }
+
+    #[test]
+    fn all_spinner_chars_detected() {
+        for &ch in &['\u{00B7}', '\u{273B}', '\u{273D}', '\u{2736}', '\u{2733}', '\u{2722}'] {
+            let content = format!("{} Doing something…", ch);
+            assert_eq!(detect_static_status(&content), ClaudeCodeStatus::Thinking,
+                "spinner char U+{:04X} not detected", ch as u32);
+        }
     }
 
     #[test]

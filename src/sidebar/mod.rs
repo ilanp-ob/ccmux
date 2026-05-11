@@ -148,6 +148,9 @@ pub struct App {
     /// Alternates every ~500 ms while any pane is alerted/waiting, driving the blink effect.
     pub blink_phase: bool,
     last_blink_tick: Instant,
+    /// Frame index (0–5) for the thinking spinner animation, advanced every ~120 ms.
+    pub thinking_frame: usize,
+    last_thinking_tick: Instant,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -233,6 +236,8 @@ impl App {
             last_own_metrics_tick: Instant::now(),
             blink_phase: false,
             last_blink_tick: Instant::now(),
+            thinking_frame: 0,
+            last_thinking_tick: Instant::now(),
         })
     }
 
@@ -1003,6 +1008,24 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Advance the thinking spinner frame every 120 ms while any pane is Thinking.
+    /// Returns true when the frame advances (triggers a redraw).
+    pub fn tick_thinking(&mut self) -> bool {
+        let any_thinking = self.groups.iter()
+            .flat_map(|g| g.panes.iter())
+            .any(|p| p.status == crate::session::ClaudeCodeStatus::Thinking);
+
+        if !any_thinking {
+            return false;
+        }
+        if self.last_thinking_tick.elapsed() < Duration::from_millis(120) {
+            return false;
+        }
+        self.last_thinking_tick = Instant::now();
+        self.thinking_frame = self.thinking_frame.wrapping_add(1);
+        true
     }
 
     /// Toggle blink phase every 500 ms while any pane needs attention.
