@@ -289,6 +289,18 @@ fn run_sidebar_loop(
                     sidebar::input::handle_mouse(app, mouse);
                     needs_redraw = true;
                 }
+                Event::Resize(_, _) => {
+                    // Re-enforce the configured sidebar width after a terminal resize
+                    // (e.g. monitor attach/detach causes tmux to reshape all panes).
+                    if let Some(ref pane_id) = app.own_pane_id.clone() {
+                        let width = app.config.sidebar.width.to_string();
+                        let tmux = tmux::Tmux::new(app.managed_server.clone());
+                        let _ = tmux.cmd()
+                            .args(["resize-pane", "-t", pane_id, "-x", &width])
+                            .status();
+                    }
+                    needs_redraw = true;
+                }
                 _ => {}
             }
         }

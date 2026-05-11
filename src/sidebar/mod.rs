@@ -107,7 +107,7 @@ pub struct App {
     /// Window ID of the pane ccmux itself is running in (used for focus logic)
     pub own_window_id: Option<String>,
     /// Pane ID of the sidebar itself (excluded from session list)
-    own_pane_id: Option<String>,
+    pub own_pane_id: Option<String>,
     pub error: Option<String>,
     pub message: Option<String>,
     pub pane_content_cache: HashMap<String, String>,
