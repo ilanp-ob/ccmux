@@ -357,12 +357,28 @@ impl App {
         );
 
         let changed = format!("{:?}", new_groups) != format!("{:?}", self.groups);
+
+        // Remember which pane was selected (by stable ID) so we can re-anchor
+        // after the list is rebuilt. Without this, adding or removing a window
+        // before the cursor silently shifts the index to a different pane.
+        let selected_pane_id: Option<String> = Self::flat_panes_ref(&self.groups)
+            .get(self.selected)
+            .map(|p| p.pane_id.clone());
+
         self.groups = new_groups;
 
-        // Clamp selection
-        let count = self.flat_panes().len();
-        if count > 0 && self.selected >= count {
-            self.selected = count - 1;
+        // Re-anchor selection to the same pane if it still exists, otherwise clamp.
+        if let Some(ref pid) = selected_pane_id {
+            if let Some(idx) = Self::flat_panes_ref(&self.groups)
+                .iter().position(|p| &p.pane_id == pid)
+            {
+                self.selected = idx;
+            } else {
+                let count = self.flat_panes().len();
+                if count > 0 && self.selected >= count {
+                    self.selected = count - 1;
+                }
+            }
         }
 
         changed
