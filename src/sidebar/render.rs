@@ -454,12 +454,15 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
                 const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
+                let blink = app.blink_phase && needs_attention && !item.is_sel;
+
+                // Blink: alternate between a bright and dim background every 500 ms.
                 let row_bg: Color = if item.is_sel {
                     SEL_BG
                 } else if is_alerted {
-                    Color::Rgb(38, 22, 10)
+                    if blink { Color::Rgb(80, 35, 5) } else { Color::Rgb(38, 22, 10) }
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    Color::Rgb(30, 28, 10)
+                    if blink { Color::Rgb(65, 60, 5) } else { Color::Rgb(30, 28, 10) }
                 } else {
                     ROW_BG
                 };
@@ -469,19 +472,21 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
                 let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
+                let alert_fg = if blink { Color::Rgb(255, 160, 60) } else { ALERT_COLOR };
+                let wait_fg  = if blink { Color::Rgb(255, 230, 60) } else { Color::Yellow };
                 let sel_span = if item.is_sel {
                     Span::styled("▌", sp(sc))
                 } else if is_alerted {
-                    Span::styled("▌", sp(ALERT_COLOR))
+                    Span::styled("▌", sp(alert_fg))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    Span::styled("▌", sp(Color::Yellow))
+                    Span::styled("▌", sp(wait_fg))
                 } else {
                     Span::styled(" ", base)
                 };
                 let name_fg = if !item.is_sel && is_alerted {
-                    ALERT_COLOR
+                    alert_fg
                 } else if !item.is_sel && item.status == ClaudeCodeStatus::WaitingInput {
-                    Color::Yellow
+                    wait_fg
                 } else {
                     Color::White
                 };
@@ -505,9 +510,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let cont_pipe: Option<Span> = if item.is_sel {
                     Some(Span::styled("▌", sp(sc)))
                 } else if is_alerted {
-                    Some(Span::styled("▌", sp(ALERT_COLOR)))
+                    Some(Span::styled("▌", sp(alert_fg)))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    Some(Span::styled("▌", sp(Color::Yellow)))
+                    Some(Span::styled("▌", sp(wait_fg)))
                 } else {
                     None
                 };
@@ -546,16 +551,16 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     ]).style(base));
                 } else if is_alerted {
                     lines.push(Line::from(vec![
-                        bar3(), Span::styled("▌", sp(ALERT_COLOR)),
+                        bar3(), Span::styled("▌", sp(alert_fg)),
                         Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(55, 58, 68))),
-                        Span::styled("● Done", sp(ALERT_COLOR)),
+                        Span::styled("● Done", sp(alert_fg)),
                         fill(),
                     ]).style(base));
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     lines.push(Line::from(vec![
-                        bar3(), Span::styled("▌", sp(Color::Yellow)),
+                        bar3(), Span::styled("▌", sp(wait_fg)),
                         Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(80, 78, 40))),
-                        Span::styled("⚠ Waiting", sp(Color::Yellow)),
+                        Span::styled("⚠ Waiting", sp(wait_fg)),
                         fill(),
                     ]).style(base));
                 } else {

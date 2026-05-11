@@ -145,6 +145,9 @@ pub struct App {
     /// Rolling window of CPU samples (≤30 entries, 5 s apart = ~2.5 min history).
     pub own_cpu_history: std::collections::VecDeque<f32>,
     last_own_metrics_tick: Instant,
+    /// Alternates every ~500 ms while any pane is alerted/waiting, driving the blink effect.
+    pub blink_phase: bool,
+    last_blink_tick: Instant,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -228,6 +231,8 @@ impl App {
             own_rss_mb: 0.0,
             own_cpu_history: std::collections::VecDeque::with_capacity(30),
             last_own_metrics_tick: Instant::now(),
+            blink_phase: false,
+            last_blink_tick: Instant::now(),
         })
     }
 
@@ -968,6 +973,32 @@ impl App {
             return true;
         }
         false
+    }
+
+    /// Toggle blink phase every 500 ms while any pane needs attention.
+    /// Returns true when the phase changes (triggers a redraw).
+    pub fn tick_blink(&mut self) -> bool {
+        let has_attention = self.groups.iter()
+            .flat_map(|g| g.panes.iter())
+            .any(|p| {
+                self.alerted_windows.contains(&p.window_id)
+                    || p.status == crate::session::ClaudeCodeStatus::WaitingInput
+            });
+
+        if !has_attention {
+            if self.blink_phase {
+                self.blink_phase = false;
+                return true;
+            }
+            return false;
+        }
+
+        if self.last_blink_tick.elapsed() < Duration::from_millis(500) {
+            return false;
+        }
+        self.last_blink_tick = Instant::now();
+        self.blink_phase = !self.blink_phase;
+        true
     }
 
     pub fn own_cpu_avg(&self) -> f32 {

@@ -344,6 +344,10 @@ fn run_sidebar_loop(
         if app.tick_own_metrics() {
             needs_redraw = true;
         }
+
+        if app.tick_blink() {
+            needs_redraw = true;
+        }
     }
 
     Ok(())
