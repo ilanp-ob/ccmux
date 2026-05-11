@@ -435,17 +435,25 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     for entry in &entries {
         match entry {
             Entry::Header { label, accent, is_current } => {
-                // Strip one leading space — bar glyph takes that column.
                 let label_rest = if label.starts_with(' ') { &label[1..] } else { label.as_str() };
-                let bar = if *is_current {
-                    Span::styled("▶", Style::default().fg(*accent).bg(HDR_BG).add_modifier(Modifier::BOLD))
+                let hdr_bg = if *is_current {
+                    // Slightly brighter row background for the active window header.
+                    Color::Rgb(35, 40, 55)
                 } else {
-                    Span::styled("▎", Style::default().fg(*accent).bg(HDR_BG))
+                    HDR_BG
+                };
+                let bar = if *is_current {
+                    // Filled block + bold accent — much more visible than a thin ▶.
+                    Span::styled("▌▶", Style::default().fg(*accent).bg(hdr_bg).add_modifier(Modifier::BOLD))
+                } else {
+                    Span::styled(" ▎", Style::default().fg(*accent).bg(hdr_bg))
                 };
                 lines.push(Line::from(vec![
                     bar,
-                    Span::styled(label_rest.to_string(), Style::default().fg(*accent).bg(HDR_BG)),
-                    Span::styled(" ".repeat(area_w), Style::default().bg(HDR_BG)),
+                    Span::styled(label_rest.to_string(),
+                        Style::default().fg(*accent).bg(hdr_bg)
+                            .add_modifier(if *is_current { Modifier::BOLD } else { Modifier::empty() })),
+                    Span::styled(" ".repeat(area_w), Style::default().bg(hdr_bg)),
                 ]));
             }
             Entry::Item(item) => {
@@ -454,16 +462,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
                 const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
-                let blink = app.blink_phase && needs_attention && !item.is_sel;
+                // Only show selection styling when the sidebar itself has focus.
+                let is_sel = item.is_sel && app.is_focused;
+                let blink = app.blink_phase && needs_attention && !is_sel;
 
-                // Background tint for attention rows; blink_phase drives a color pulse
-                // but the primary attention signal is now native SLOW_BLINK on the name.
-                let row_bg: Color = if item.is_sel {
+                // ON phase: vivid bright background — obvious contrast with normal dark rows.
+                // OFF phase: subtle tint so the row still reads as "needs attention".
+                let row_bg: Color = if is_sel {
                     SEL_BG
                 } else if is_alerted {
-                    if blink { Color::Rgb(120, 45, 5) } else { Color::Rgb(38, 22, 10) }
+                    if blink { Color::Rgb(170, 65, 10) } else { Color::Rgb(38, 22, 10) }
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
-                    if blink { Color::Rgb(90, 80, 5) } else { Color::Rgb(30, 28, 10) }
+                    if blink { Color::Rgb(130, 115, 10) } else { Color::Rgb(30, 28, 10) }
                 } else {
                     ROW_BG
                 };
@@ -473,9 +483,9 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
                 let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
-                let alert_fg = ALERT_COLOR;
-                let wait_fg  = Color::Yellow;
-                let sel_span = if item.is_sel {
+                let alert_fg = if blink { Color::Rgb(255, 220, 180) } else { ALERT_COLOR };
+                let wait_fg  = if blink { Color::Rgb(255, 245, 150) } else { Color::Yellow };
+                let sel_span = if is_sel {
                     Span::styled("▌", sp(sc))
                 } else if is_alerted {
                     Span::styled("▌", sp(alert_fg))

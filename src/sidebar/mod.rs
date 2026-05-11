@@ -529,6 +529,16 @@ impl App {
             .unwrap_or(true);
         if active != self.is_focused {
             self.is_focused = active;
+            // When regaining focus, snap selection back to the current window's pane.
+            if active {
+                let own_window = self.own_window_id.clone().unwrap_or_default();
+                if let Some(idx) = self.flat_panes()
+                    .iter()
+                    .position(|p| p.window_id == own_window)
+                {
+                    self.selected = idx;
+                }
+            }
             true
         } else {
             false
