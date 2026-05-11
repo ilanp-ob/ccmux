@@ -10,14 +10,13 @@ fn is_waiting_for_input(content: &str) -> bool {
     if content.contains("[y/n]") || content.contains("[Y/n]") {
         return true;
     }
-    // Tool-approval footer: "Esc to cancel · Tab to amend · ctrl+e to explain"
-    // "ctrl+e to explain" is unique to Claude's approval UI — never in normal text.
-    if content.contains("ctrl+e to explain") {
+    // Tool-approval footer exact combined phrase — the · separators make this
+    // specific enough that it won't appear in Claude's own text output.
+    if content.contains("Tab to amend · ctrl+e to explain") {
         return true;
     }
-    // Numbered-selection dialog footer: "Enter to select · ↑/↓ to navigate · Esc to cancel"
-    // The combination of both phrases is specific to Claude's selection UI.
-    if content.contains("Enter to select") && content.contains("to navigate") {
+    // Numbered-selection dialog footer combined phrase.
+    if content.contains("Enter to select · ↑/↓ to navigate") {
         return true;
     }
     false
@@ -117,8 +116,14 @@ mod tests {
     }
 
     #[test]
+    fn no_false_positive_from_partial_phrases() {
+        // "ctrl+e to explain" alone (e.g. in a table I wrote) — should NOT trigger
+        let content = "ctrl+e to explain or selection dialog visible | WaitingInput\n─────\n❯";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
     fn no_false_positive_from_esc_to_cancel_alone() {
-        // "Esc to cancel" appears in normal Claude text — should NOT be WaitingInput
         let content = "You can press Esc to cancel the operation if needed.\n─────\n❯";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
     }
