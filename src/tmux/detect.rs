@@ -214,6 +214,12 @@ impl Tmux {
             if let Some(group) = groups.iter_mut().find(|g| g.window_id == window_id) {
                 group.panes.push(pane);
             } else {
+                // Lock the name the first time we see this window so that tmux
+                // automatic-rename can't overwrite it with a non-Claude pane's command
+                // (e.g. "cargo" or "zsh") when the user has multiple panes open.
+                let _ = self.cmd()
+                    .args(["set-window-option", "-t", &window_id, "automatic-rename", "off"])
+                    .output();
                 groups.push(WindowGroup {
                     window_id,
                     window_name,
