@@ -324,6 +324,33 @@ impl App {
         }
     }
 
+    /// Returns the index into `WINDOW_COLORS` that is not already used by any live session.
+    /// Wraps around if all colors are taken. Never returns 0 ("none").
+    pub fn next_available_color_idx(&self) -> usize {
+        let colors = crate::config::WINDOW_COLORS;
+        let n = colors.len();
+        let used: std::collections::HashSet<&str> = self.groups.iter()
+            .filter_map(|g| g.color_name.as_deref())
+            .filter(|c| !c.is_empty())
+            .collect();
+        // Try indices 1..n in order; return the first not in use.
+        for i in 1..n {
+            if !used.contains(colors[i].2) {
+                return i;
+            }
+        }
+        // All taken — cycle based on session count so each new session still differs from its
+        // immediate predecessor.
+        (self.groups.len() % (n - 1)) + 1
+    }
+
+    /// Returns `WorktreeOpts::default()` with `color_idx` pre-filled to the next available color.
+    pub fn default_new_session_opts(&self) -> crate::sidebar::mode::WorktreeOpts {
+        let mut opts = crate::sidebar::mode::WorktreeOpts::default();
+        opts.color_idx = self.next_available_color_idx();
+        opts
+    }
+
     pub fn clear_messages(&mut self) {
         self.error = None;
         self.message = None;

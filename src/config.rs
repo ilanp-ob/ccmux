@@ -165,6 +165,12 @@ pub const WINDOW_COLORS: &[(&str, &str, &str)] = &[
     ("purple", "#C678DD", "colour135"),
     ("pink",   "#FF79C6", "colour212"),
     ("cyan",   "#56B6C2", "colour73"),
+    ("gold",   "#FFD700", "colour220"),
+    ("teal",   "#008787", "colour30"),
+    ("violet", "#8700FF", "colour93"),
+    ("lime",   "#AFFF00", "colour154"),
+    ("rose",   "#FF5FAF", "colour205"),
+    ("sky",    "#00AFFF", "colour39"),
 ];
 
 pub const AVAILABLE_MODELS: &[&str] = &[

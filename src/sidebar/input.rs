@@ -450,7 +450,7 @@ fn handle_worktree_branch_select(
                     .unwrap_or_else(|| branch.clone());
                 app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
                     repo_root, branch, folder,
-                    opts: crate::sidebar::mode::WorktreeOpts::default(),
+                    opts: app.default_new_session_opts(),
                     existing_wt_path: Some(wt_path),
                 });
                 return;
@@ -504,7 +504,7 @@ fn handle_worktree_folder_name(
         KeyCode::Esc   => { app.mode = Mode::Normal; }
         KeyCode::Enter => {
             let base_branch_cursor = base_branch.as_deref().map(|b| b.chars().count()).unwrap_or(0);
-            let mut opts = crate::sidebar::mode::WorktreeOpts::default();
+            let mut opts = app.default_new_session_opts();
             opts.base_branch = base_branch;
             opts.base_branch_cursor = base_branch_cursor;
             app.mode = Mode::WorktreeFlow(WorktreeStep::Options {
@@ -694,12 +694,12 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                     if let Some(path) = filtered.get(clamped) {
                         app.mode = Mode::FolderPick(FolderPickStep::Options {
                             path: (*path).clone(), is_new: false,
-                            opts: crate::sidebar::mode::WorktreeOpts::default(),
+                            opts: app.default_new_session_opts(),
                         });
                     } else if !filter.is_empty() {
                         app.mode = Mode::FolderPick(FolderPickStep::Options {
                             path: root.join(&filter), is_new: true,
-                            opts: crate::sidebar::mode::WorktreeOpts::default(),
+                            opts: app.default_new_session_opts(),
                         });
                     }
                 }
