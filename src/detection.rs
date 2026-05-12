@@ -44,9 +44,12 @@ fn is_thinking(content: &str) -> bool {
         if t.ends_with("Thinking\u{2026}") && t.len() > "Thinking\u{2026}".len() {
             return true;
         }
-        // Standard spinner: ornament char followed immediately by a space
+        // Standard spinner: ornament char + space + active operation (always contains …).
+        // Excludes completion summaries like "✻ Brewed for 3m 30s" which share the ornament.
         let mut chars = t.chars();
-        matches!(chars.next(), Some(c) if SPINNERS.contains(&c)) && chars.next() == Some(' ')
+        matches!(chars.next(), Some(c) if SPINNERS.contains(&c))
+            && chars.next() == Some(' ')
+            && t.contains('\u{2026}')
     })
 }
 
@@ -195,6 +198,15 @@ mod tests {
             assert_eq!(detect_static_status(&content), ClaudeCodeStatus::Thinking,
                 "spinner char U+{:04X} not detected", ch as u32);
         }
+    }
+
+    #[test]
+    fn completion_summary_not_thinking() {
+        // "✻ Brewed for 3m 30s" shares the ornament char but has no …
+        let content = "✻ Brewed for 3m 30s\n─────\n❯";
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::Idle);
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+        assert_eq!(detect_changed_status(content), ClaudeCodeStatus::Working);
     }
 
     #[test]
