@@ -3,6 +3,40 @@ use super::{App, Mode};
 use super::mode::{WorktreeStep, FolderPickStep};
 use crate::config::WINDOW_COLORS;
 
+/// Returns `Some(score)` if `needle` appears as a subsequence of `haystack` (case-insensitive).
+/// Higher score = better match (consecutive runs, word boundaries).
+fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
+    if needle.is_empty() { return Some(0); }
+    let h: Vec<char> = haystack.to_lowercase().chars().collect();
+    let n: Vec<char> = needle.to_lowercase().chars().collect();
+    let mut hi = 0;
+    let mut ni = 0;
+    let mut score = 0i32;
+    let mut last_match: Option<usize> = None;
+    while hi < h.len() && ni < n.len() {
+        if h[hi] == n[ni] {
+            if last_match.is_some_and(|lm| lm + 1 == hi) { score += 10; }
+            if hi == 0 || matches!(h[hi - 1], '/' | '-' | '_' | ' ' | '.') { score += 5; }
+            last_match = Some(hi);
+            ni += 1;
+        }
+        hi += 1;
+    }
+    if ni == n.len() { Some(score) } else { None }
+}
+
+/// Filter and sort `items` by fuzzy score against `filter`. When `filter` is empty,
+/// all items are returned in original order. Key extracts the string to match against.
+fn fuzzy_sort<'a, T>(items: &'a [T], filter: &str, key: impl Fn(&T) -> String) -> Vec<&'a T> {
+    let mut scored: Vec<(i32, &T)> = items.iter()
+        .filter_map(|item| fuzzy_score(&key(item), filter).map(|s| (s, item)))
+        .collect();
+    if !filter.is_empty() {
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+    }
+    scored.into_iter().map(|(_, item)| item).collect()
+}
+
 /// Handle a text-editing key for a field with an in-text cursor.
 /// Returns `Some((new_text, new_cursor))` if the key was consumed, `None` otherwise.
 /// Cursor is char-indexed. Does NOT handle Esc / Enter / Tab / mode-specific keys.
@@ -401,9 +435,7 @@ fn handle_worktree_branch_select(
     new_branch_text: String,
     new_branch_cursor: usize,
 ) {
-    let filtered: Vec<&crate::git::BranchEntry> = branches.iter()
-        .filter(|b| b.name.to_lowercase().contains(&filter.to_lowercase()))
-        .collect();
+    let filtered = fuzzy_sort(&branches, &filter, |b| b.name.clone());
     let filtered_len = filtered.len();
 
     macro_rules! set {
@@ -479,12 +511,7 @@ fn handle_worktree_branch_select(
                 }
             } else {
                 if let Some((new_f, new_fc)) = apply_text_key(&filter, filter_cursor, &key) {
-                    // Re-clamp list cursor after filter change
-                    let new_len = branches.iter()
-                        .filter(|b| b.name.to_lowercase().contains(&new_f.to_lowercase()))
-                        .count();
-                    let new_c = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
-                    set!(new_f, new_fc, new_c, entering_new, new_branch_text, new_branch_cursor);
+                    set!(new_f, new_fc, 0, entering_new, new_branch_text, new_branch_cursor);
                 }
             }
         }
@@ -599,8 +626,6 @@ fn handle_worktree_options(
 }
 
 fn handle_folder_pick(app: &mut App, key: KeyEvent) {
-    use std::path::PathBuf;
-
     let step = match &app.mode {
         Mode::FolderPick(s) => s.clone(),
         _ => return,
@@ -662,11 +687,9 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
             }
         }
         FolderPickStep::Picking { root, dirs, filter, filter_cursor, cursor } => {
-            let filtered: Vec<&PathBuf> = dirs.iter()
-                .filter(|d| d.file_name()
-                    .map(|n| n.to_string_lossy().to_lowercase().contains(&filter.to_lowercase()))
-                    .unwrap_or(false))
-                .collect();
+            let filtered = fuzzy_sort(&dirs, &filter, |d| {
+                d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            });
             let filtered_len = filtered.len();
             let clamped = if filtered_len == 0 { 0 } else { cursor.min(filtered_len - 1) };
 
@@ -713,13 +736,7 @@ fn handle_folder_pick(app: &mut App, key: KeyEvent) {
                 KeyCode::Backspace if filter.is_empty() => { app.navigate_folder_up(); }
                 _ => {
                     if let Some((new_f, new_fc)) = apply_text_key(&filter, filter_cursor, &key) {
-                        let new_len = dirs.iter()
-                            .filter(|d| d.file_name()
-                                .map(|n| n.to_string_lossy().to_lowercase().contains(&new_f.to_lowercase()))
-                                .unwrap_or(false))
-                            .count();
-                        let new_c = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
-                        set_pick!(new_f, new_fc, new_c);
+                        set_pick!(new_f, new_fc, 0);
                     }
                 }
             }
