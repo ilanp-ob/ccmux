@@ -545,17 +545,14 @@ impl App {
 
         let pane_count = self.flat_panes().len();
 
-        // Suppress a background job when any Claude pane already covers the same directory.
-        // Intentionally ignores pane status — using status caused flickering as Claude
-        // oscillated between Working and Idle during normal operation.
-        let claude_cwds: std::collections::HashSet<std::path::PathBuf> = self.flat_panes()
-            .iter()
-            .filter(|p| matches!(p.pane_type, crate::session::PaneType::Claude))
-            .map(|p| p.current_path.clone())
-            .collect();
+        // Keep only true background daemons: Claude Code names the PTY socket after the
+        // job's short ID for headless agents (e.g. "c16e74e0.sock") but draws from a
+        // random-hash spare pool for interactive sessions ("dcf2ef6c.pty.sock"). This is
+        // more reliable than cwd matching, which incorrectly suppressed background agents
+        // sharing a directory with a separate interactive session.
         let raw_jobs: Vec<JobEntry> = load_jobs()
             .into_iter()
-            .filter(|j| !claude_cwds.contains(&j.cwd))
+            .filter(|j| crate::jobs::is_background_daemon(&j.id))
             .collect();
         let new_jobs = self.assign_job_display_nums(raw_jobs, pane_count);
 

@@ -196,6 +196,25 @@ pub fn pty_sock_for_session(session_short: &str) -> Option<String> {
     v["workers"][session_short]["ptySock"].as_str().map(String::from)
 }
 
+/// Returns true when this job is a true background daemon rather than an interactive
+/// session that also happens to write state.json.
+///
+/// Claude Code names the PTY socket after the job's short ID for background daemons
+/// (e.g. "c16e74e0.sock"), but draws from a random-hash spare pool for interactive
+/// sessions (e.g. "dcf2ef6c.pty.sock"). Jobs absent from the roster entirely are
+/// also treated as background daemons (offline or dormant).
+pub fn is_background_daemon(job_id: &str) -> bool {
+    match pty_sock_for_session(job_id) {
+        Some(sock) => {
+            let filename = std::path::Path::new(&sock)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            filename.starts_with(job_id)
+        }
+        None => true,
+    }
+}
 
 fn truncate_str(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
