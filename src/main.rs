@@ -386,8 +386,14 @@ fn run_focus(n: usize, server: Option<String>) -> Result<()> {
     )?;
 
     let flat: Vec<_> = groups.iter().flat_map(|g| g.panes.iter()).collect();
-    let pane = flat.iter().find(|p| p.display_num == n)
-        .ok_or_else(|| anyhow::anyhow!("No session with number {}", n))?;
+    let Some(pane) = flat.iter().find(|p| p.display_num == n) else {
+        // No matching session — show a brief status-bar hint and exit cleanly so
+        // tmux doesn't display the ugly "'ccmux focus N' returned 1" toast.
+        let _ = tmux.cmd()
+            .args(["display-message", &format!("ccmux: no session #{}", n)])
+            .status();
+        return Ok(());
+    };
 
     let window_id = pane.window_id.clone();
     let pane_id = pane.pane_id.clone();
