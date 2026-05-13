@@ -10,6 +10,7 @@ use anyhow::Result;
 
 use crate::config::Config;
 use crate::detection::{detect_changed_status, detect_static_status, detect_status};
+use crate::jobs::{JobEntry, load_jobs, reply_to_job};
 use crate::session::{ClaudeCodeStatus, DetectedPane, WindowGroup};
 use crate::tmux::Tmux;
 
@@ -151,6 +152,11 @@ pub struct App {
     /// Frame index (0–5) for the thinking spinner animation, advanced every ~120 ms.
     pub thinking_frame: usize,
     last_thinking_tick: Instant,
+    /// Background Claude daemon jobs from ~/.claude/jobs/
+    pub jobs: Vec<JobEntry>,
+    last_jobs_tick: Instant,
+    /// Scroll offset within the agents list (items, not rows).
+    pub jobs_scroll_offset: usize,
 }
 
 fn scan_dirs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -199,7 +205,7 @@ impl App {
         };
         let sticky = config.sidebar.sticky;
 
-        Ok(Self {
+        let mut app = Self {
             groups,
             selected,
             mode: Mode::Normal,
@@ -238,7 +244,14 @@ impl App {
             last_blink_tick: Instant::now(),
             thinking_frame: 0,
             last_thinking_tick: Instant::now(),
-        })
+            jobs: Vec::new(), // populated below after pane count is known
+            last_jobs_tick: Instant::now(),
+            jobs_scroll_offset: 0,
+        };
+        // Assign display numbers after struct is initialized (needs flat_panes())
+        let pane_count = app.flat_panes().len();
+        app.jobs = app.assign_job_display_nums(load_jobs(), pane_count);
+        Ok(app)
     }
 
     fn load_groups(
@@ -297,12 +310,32 @@ impl App {
         Self::flat_panes_ref(&self.groups)
     }
 
+    /// Total navigable items: panes + daemon jobs.
+    pub fn total_items(&self) -> usize {
+        self.flat_panes().len() + self.jobs.len()
+    }
+
+    /// Returns the selected job if the cursor is in the agents section.
+    pub fn selected_job(&self) -> Option<&JobEntry> {
+        let pane_count = self.flat_panes().len();
+        if self.selected >= pane_count {
+            self.jobs.get(self.selected - pane_count)
+        } else {
+            None
+        }
+    }
+
     pub fn selected_pane(&self) -> Option<&DetectedPane> {
-        self.flat_panes().get(self.selected).copied()
+        let panes = self.flat_panes();
+        if self.selected < panes.len() {
+            panes.get(self.selected).copied()
+        } else {
+            None
+        }
     }
 
     pub fn select_next(&mut self) {
-        let count = self.flat_panes().len();
+        let count = self.total_items();
         if count > 0 {
             self.selected = (self.selected + 1) % count;
             self.last_entered_idx = None;
@@ -310,7 +343,7 @@ impl App {
     }
 
     pub fn select_prev(&mut self) {
-        let count = self.flat_panes().len();
+        let count = self.total_items();
         if count > 0 {
             self.selected = if self.selected == 0 { count - 1 } else { self.selected - 1 };
             self.last_entered_idx = None;
@@ -318,8 +351,16 @@ impl App {
     }
 
     pub fn select_by_display_num(&mut self, n: usize) {
+        let pane_count = self.flat_panes().len();
+        // Check panes first
         if let Some(idx) = self.flat_panes().iter().position(|p| p.display_num == n) {
             self.selected = idx;
+            self.last_entered_idx = None;
+            return;
+        }
+        // Then jobs
+        if let Some(idx) = self.jobs.iter().position(|j| j.display_num == n) {
+            self.selected = pane_count + idx;
             self.last_entered_idx = None;
         }
     }
@@ -457,12 +498,35 @@ impl App {
         }
 
         let mut changed = false;
+        // Snapshot the jobs list before the mutable groups loop (disjoint field borrows).
+        let jobs_snap: Vec<(std::path::PathBuf, crate::jobs::JobStatus)> = self.jobs
+            .iter()
+            .map(|j| (j.cwd.clone(), j.status.clone()))
+            .collect();
+
         for (pane_id, new_status, content) in updates {
             for group in &mut self.groups {
                 for pane in &mut group.panes {
-                    if pane.pane_id == pane_id && new_status != pane.status {
-                        pane.status = new_status.clone();
-                        changed = true;
+                    if pane.pane_id == pane_id {
+                        // Hybrid fallback: if terminal content gives Idle/Unknown, defer to
+                        // the daemon job's state.json (already loaded in self.jobs) for the
+                        // same cwd — Working or Blocked there are authoritative.
+                        let effective_status = if matches!(new_status, ClaudeCodeStatus::Idle | ClaudeCodeStatus::Unknown) {
+                            jobs_snap.iter()
+                                .filter(|(cwd, _)| *cwd == pane.current_path)
+                                .find_map(|(_, js)| match js {
+                                    crate::jobs::JobStatus::Working => Some(ClaudeCodeStatus::Working),
+                                    crate::jobs::JobStatus::Blocked => Some(ClaudeCodeStatus::WaitingInput),
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| new_status.clone())
+                        } else {
+                            new_status.clone()
+                        };
+                        if effective_status != pane.status {
+                            pane.status = effective_status;
+                            changed = true;
+                        }
                     }
                 }
             }
@@ -470,6 +534,137 @@ impl App {
         }
 
         changed
+    }
+
+    /// Reload daemon jobs from disk (called every 2 s). Returns true if the list changed.
+    pub fn tick_jobs(&mut self) -> bool {
+        if self.last_jobs_tick.elapsed() < Duration::from_secs(2) {
+            return false;
+        }
+        self.last_jobs_tick = Instant::now();
+
+        let pane_count = self.flat_panes().len();
+
+        // Suppress a background job when any Claude pane already covers the same directory.
+        // Intentionally ignores pane status — using status caused flickering as Claude
+        // oscillated between Working and Idle during normal operation.
+        let claude_cwds: std::collections::HashSet<std::path::PathBuf> = self.flat_panes()
+            .iter()
+            .filter(|p| matches!(p.pane_type, crate::session::PaneType::Claude))
+            .map(|p| p.current_path.clone())
+            .collect();
+        let raw_jobs: Vec<JobEntry> = load_jobs()
+            .into_iter()
+            .filter(|j| !claude_cwds.contains(&j.cwd))
+            .collect();
+        let new_jobs = self.assign_job_display_nums(raw_jobs, pane_count);
+
+        let changed = new_jobs.len() != self.jobs.len()
+            || new_jobs.iter().zip(&self.jobs).any(|(a, b)| {
+                a.id != b.id || a.status != b.status || a.detail != b.detail
+            });
+
+        // Re-anchor selection if we were on a job that still exists
+        if self.selected >= pane_count {
+            let job_idx = self.selected - pane_count;
+            if let Some(old_id) = self.jobs.get(job_idx).map(|j| j.id.clone()) {
+                if let Some(new_idx) = new_jobs.iter().position(|j| j.id == old_id) {
+                    self.selected = pane_count + new_idx;
+                } else {
+                    self.selected = self.total_items().saturating_sub(1).min(pane_count);
+                }
+            }
+        }
+
+        self.jobs = new_jobs;
+        changed
+    }
+
+    fn assign_job_display_nums(&self, mut jobs: Vec<JobEntry>, pane_count: usize) -> Vec<JobEntry> {
+        let start = pane_count + 1;
+        for (i, job) in jobs.iter_mut().enumerate() {
+            job.display_num = start + i;
+        }
+        jobs
+    }
+
+    /// Open the selected agent in a new tmux window.
+    /// Prefers a direct PTY attach (via `ccmux pty-attach`) when the daemon has a live
+    /// socket for the session; falls back to `claude agents` TUI otherwise.
+    pub fn resume_selected_job(&mut self) {
+        let Some(job) = self.selected_job() else { return };
+        let cwd = job.cwd.display().to_string();
+        let name = job.name.clone();
+        let id = job.id.clone();
+        let tmux = Tmux::new(self.managed_server.clone());
+
+        // Direct PTY attach — most natural; gives a real live terminal in the agent
+        if let Some(sock) = crate::jobs::pty_sock_for_session(&id) {
+            if std::path::Path::new(&sock).exists() {
+                let binary = std::env::current_exe()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "ccmux".to_string());
+                let cmd = format!("{} pty-attach {}", binary, id);
+                match tmux.new_window_cmd(&self.managed_session, &name,
+                                          std::path::Path::new(&cwd), &cmd) {
+                    Ok(_) => { self.set_message(format!("Attached to: {}", name)); return; }
+                    Err(_) => {} // fall through
+                }
+            }
+        }
+
+        // Reuse an existing `claude agents` window if one is already open
+        if let Some(window_id) = self.find_agents_window(&tmux) {
+            let _ = tmux.select_window(&window_id);
+            self.set_message("Switched to existing agents window");
+            return;
+        }
+
+        // Last resort: open the claude agents TUI
+        match tmux.new_window_cmd(&self.managed_session, "agents",
+                                  std::path::Path::new(&cwd), "claude agents") {
+            Ok(_) => self.set_message(format!("Opening agents view for: {}", name)),
+            Err(e) => self.error = Some(format!("Failed to open agents view: {}", e)),
+        }
+    }
+
+    /// Find an existing tmux window in this session that is running `claude agents`.
+    fn find_agents_window(&self, tmux: &Tmux) -> Option<String> {
+        let out = tmux.cmd()
+            .args(["list-panes", "-a", "-s", "-t", &self.managed_session,
+                   "-F", "#{window_id} #{window_name} #{pane_current_command}"])
+            .output().ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find(|line| {
+                let lower = line.to_lowercase();
+                lower.contains("claude") && lower.contains("agents")
+            })
+            .and_then(|line| line.split_whitespace().next())
+            .map(String::from)
+    }
+
+    /// Send a text reply to the selected blocked job by appending to its timeline.jsonl.
+    pub fn reply_to_selected_job(&mut self, text: &str) {
+        let Some(job) = self.selected_job() else { return };
+        let job = job.clone();
+        match reply_to_job(&job, text) {
+            Ok(_) => {
+                self.set_message(format!("Reply sent to: {}", job.name));
+                // Optimistically flip the job to Working so the amber blink clears immediately.
+                // tick_jobs() will sync the real state from state.json within 2 s.
+                let pane_count = self.flat_panes().len();
+                if self.selected >= pane_count {
+                    let job_idx = self.selected - pane_count;
+                    if let Some(j) = self.jobs.get_mut(job_idx) {
+                        j.status = crate::jobs::JobStatus::Working;
+                        j.detail = format!("↩ replied: {}", text);
+                        j.needs = None;
+                    }
+                }
+            }
+            Err(e) => self.error = Some(format!("Reply failed: {}", e)),
+        }
     }
 
     /// Switch tmux focus to the selected Claude pane, auto-opening a sidebar there if needed.
@@ -1180,6 +1375,14 @@ impl App {
                         worktree_path,
                     },
                 );
+            }
+            ActionItem::SendText { text, .. } => {
+                if self.selected_job().is_some() {
+                    self.reply_to_selected_job(&text);
+                } else {
+                    self.send_message(&text);
+                }
+                self.mode = crate::sidebar::mode::Mode::Normal;
             }
         }
     }

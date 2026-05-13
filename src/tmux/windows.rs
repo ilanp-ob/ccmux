@@ -32,6 +32,33 @@ impl Tmux {
         Ok(window_id)
     }
 
+    /// Create a new window that starts with `shell_cmd` as its initial process.
+    /// The command runs immediately when the window opens, so hooks like after-new-window
+    /// see the process in `pane_current_command` without a shell-startup race.
+    pub fn new_window_cmd(
+        &self,
+        session: &str,
+        window_name: &str,
+        path: &Path,
+        shell_cmd: &str,
+    ) -> Result<String> {
+        let path_str = path.to_string_lossy();
+        let output = self.cmd()
+            .args([
+                "new-window", "-t", session, "-n", window_name,
+                "-c", path_str.as_ref(),
+                "-P", "-F", "#{window_id}",
+                shell_cmd,
+            ])
+            .output()
+            .context("tmux new-window failed")?;
+        let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", &window_id, "automatic-rename", "off"])
+            .status();
+        Ok(window_id)
+    }
+
     /// Split a specific window horizontally to create the sidebar pane.
     /// Targets the leftmost pane in that window so -hb always places the
     /// sidebar at the left edge regardless of which pane has focus.

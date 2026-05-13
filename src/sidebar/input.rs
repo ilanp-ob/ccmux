@@ -122,6 +122,11 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('j') | KeyCode::Down => app.select_next(),
         KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
         KeyCode::Enter => {
+            // Daemon job selected → open it in a new tmux window
+            if app.selected_job().is_some() {
+                app.resume_selected_job();
+                return;
+            }
             let cur = app.selected;
             let is_cross_window = app.selected_pane()
                 .map(|p| Some(&p.window_id) != app.own_window_id.as_ref())
@@ -140,6 +145,11 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
                 app.last_entered_idx = Some(cur);
             }
         }
+        KeyCode::Char('r') => {
+            if app.selected_job().is_some() {
+                app.resume_selected_job();
+            }
+        }
         KeyCode::Char('?') => app.mode = Mode::Help,
         KeyCode::Char('K') => {
             if let Some(pane) = app.selected_pane() {
@@ -152,15 +162,33 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         // 0-9: jump to session by display number (0 = session 10); press again to focus
         KeyCode::Char(c) if c.is_ascii_digit() => {
             let n = if c == '0' { 10 } else { c as usize - '0' as usize };
-            if app.selected_pane().map(|p| p.display_num == n).unwrap_or(false) {
+            let cur_pane_num = app.selected_pane().map(|p| p.display_num);
+            let cur_job_num  = app.selected_job().map(|j| j.display_num);
+            if cur_pane_num == Some(n) {
                 app.focus_selected();
+            } else if cur_job_num == Some(n) {
+                app.resume_selected_job();
             } else {
                 app.select_by_display_num(n);
             }
         }
         KeyCode::Char('s') => app.toggle_sticky(),
         KeyCode::Char('i') => {
-            app.mode = Mode::Compose { text: String::new(), cursor: 0 };
+            let choices = if let Some(job) = app.selected_job() {
+                let src = job.needs.as_deref().unwrap_or(&job.detail);
+                parse_choices(src)
+            } else if let Some(pane) = app.selected_pane() {
+                app.pane_content_cache.get(&pane.pane_id)
+                    .and_then(|c| parse_choices_from_pane(c))
+            } else {
+                None
+            };
+
+            if let Some(items) = choices {
+                app.mode = Mode::ActionMenu { items, cursor: 0 };
+            } else {
+                app.mode = Mode::Compose { text: String::new(), cursor: 0 };
+            }
         }
         KeyCode::Char('e') => {
             if let Some(pane) = app.selected_pane() {
@@ -254,7 +282,14 @@ fn handle_compose(app: &mut App, key: KeyEvent) {
     };
     match key.code {
         KeyCode::Esc   => { app.mode = Mode::Normal; }
-        KeyCode::Enter => { app.send_message(&text); app.mode = Mode::Normal; }
+        KeyCode::Enter => {
+            if app.selected_job().is_some() {
+                app.reply_to_selected_job(&text);
+            } else {
+                app.send_message(&text);
+            }
+            app.mode = Mode::Normal;
+        }
         _ => {
             if let Some((new_text, new_cursor)) = apply_text_key(&text, cursor, &key) {
                 app.mode = Mode::Compose { text: new_text, cursor: new_cursor };
@@ -760,4 +795,122 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) {
             app.selected = idx;
         }
     }
+}
+
+// ─── Smart choice parsing ─────────────────────────────────────────────────────
+
+use crate::sidebar::mode::ActionItem;
+
+/// Parse a short text (e.g. an agent's `needs` field) for selectable choices.
+/// Returns `Some(items)` only when 2–6 distinct options are unambiguously detected.
+pub fn parse_choices(text: &str) -> Option<Vec<ActionItem>> {
+    // y/n binary prompt
+    if let Some(items) = parse_yn(text) { return Some(items); }
+    // "choose A (...), B (...), or C (...)" inline style
+    if let Some(items) = parse_inline_options(text) { return Some(items); }
+    None
+}
+
+/// Parse the last visible lines of a pane's content for selectable choices.
+pub fn parse_choices_from_pane(content: &str) -> Option<Vec<ActionItem>> {
+    let lines: Vec<&str> = content.lines().collect();
+    let tail: Vec<&str> = lines.iter().rev().take(30).copied().collect::<Vec<_>>()
+        .into_iter().rev().collect();
+    let joined = tail.join("\n");
+
+    if let Some(items) = parse_yn(&joined) { return Some(items); }
+    if let Some(items) = parse_numbered_list(&tail) { return Some(items); }
+    if let Some(items) = parse_inline_options(&joined) { return Some(items); }
+    None
+}
+
+fn make_send(label: impl Into<String>, text: impl Into<String>) -> ActionItem {
+    ActionItem::SendText { label: label.into(), text: text.into() }
+}
+
+fn parse_yn(text: &str) -> Option<Vec<ActionItem>> {
+    let lower = text.to_lowercase();
+    if lower.contains("[y/n]") || lower.contains("(y/n)") {
+        return Some(vec![make_send("y — yes", "y"), make_send("n — no", "n")]);
+    }
+    if lower.contains("[y/n") || lower.contains("[yes/no]") {
+        return Some(vec![make_send("yes", "yes"), make_send("no", "no")]);
+    }
+    None
+}
+
+/// Parse numbered or lettered list items from recent pane lines.
+/// Matches: "1. text", "2) text", "A. text" (if ≥2 items).
+/// Handles leading selection cursors like "❯", ">", "▶" that terminals draw next to the
+/// currently-highlighted option — those characters appear before "1. Yes" and would
+/// otherwise cause the first option to be skipped.
+fn parse_numbered_list(lines: &[&str]) -> Option<Vec<ActionItem>> {
+    let mut items = Vec::new();
+    for &line in lines {
+        let trimmed = line.trim();
+        // Strip any leading non-alphanumeric prefix (cursor/selection indicators like ❯, >, ▶)
+        let stripped = trimmed
+            .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
+            .trim_start();
+
+        // Match "1." "1)" "A." "A)" at the start of the stripped line
+        let rest = if let Some(r) = stripped.strip_prefix(|c: char| c.is_ascii_digit())
+            .and_then(|s| s.strip_prefix('.').or_else(|| s.strip_prefix(')')))
+        {
+            r.trim()
+        } else if let Some(r) = stripped.strip_prefix(|c: char| c.is_ascii_alphabetic() && c.is_uppercase())
+            .and_then(|s| s.strip_prefix('.').or_else(|| s.strip_prefix(')')))
+        {
+            r.trim()
+        } else {
+            continue;
+        };
+        if rest.len() >= 2 {
+            // Use stripped (without cursor indicator) as the label, rest as the sent text
+            items.push(make_send(stripped, rest));
+        }
+    }
+    if items.len() >= 2 && items.len() <= 8 {
+        Some(items)
+    } else {
+        None
+    }
+}
+
+/// Parse inline "choose A (desc), B (desc), or C (desc)" style options.
+/// Returns items when 2–6 single-letter options with parenthetical descriptions are found.
+fn parse_inline_options(text: &str) -> Option<Vec<ActionItem>> {
+    // Strip "choose" / "pick" / "select" prefix
+    let cleaned = {
+        let lower = text.to_lowercase();
+        let start = ["choose ", "pick ", "select "]
+            .iter()
+            .find_map(|p| lower.find(p).map(|i| i + p.len()))
+            .unwrap_or(0);
+        &text[start..]
+    };
+
+    // Split on ", " and " or " separators
+    let parts: Vec<&str> = cleaned
+        .split(|c| c == ',')
+        .flat_map(|s| s.split(" or "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if parts.len() < 2 || parts.len() > 6 { return None; }
+
+    let mut items = Vec::new();
+    for part in &parts {
+        // Must start with a single letter/digit optionally followed by description in parens
+        let first_char = part.chars().next()?;
+        if !first_char.is_ascii_alphanumeric() { return None; }
+        // The send text is just the first token (the letter/identifier)
+        let send_text = part.split_whitespace().next().unwrap_or(part);
+        // Strip trailing period/colon from send text if it accidentally got included
+        let send_text = send_text.trim_end_matches(|c| c == '.' || c == ':');
+        items.push(make_send(*part, send_text));
+    }
+
+    if items.len() >= 2 { Some(items) } else { None }
 }

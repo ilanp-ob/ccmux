@@ -258,7 +258,7 @@ fn is_shell_cmd(cmd: &str) -> bool {
 
 fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) {
     let total_items = App::flat_panes_ref(&app.groups).len();
-    if total_items == 0 {
+    if total_items == 0 && app.jobs.is_empty() {
         frame.render_widget(
             Paragraph::new("  No Claude sessions detected")
                 .style(Style::default().fg(Color::DarkGray).bg(sidebar_bg)),
@@ -677,11 +677,168 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
         )));
     }
 
+    // ── Agents section ────────────────────────────────────────────────────────
+    if !app.jobs.is_empty() {
+        let pane_count = total_items;
+
+        // How many rows are left after panes?
+        let rows_so_far = lines.len();
+        let remaining = area_h.saturating_sub(rows_so_far);
+
+        // Each agent: 3 content rows + 1 separator = 4 rows.
+        // Reserve 1 for the header + 1 for a potential "↑ N above" indicator.
+        const AGENT_ROWS: usize = 4;
+        let max_vis = remaining.saturating_sub(2) / AGENT_ROWS;
+
+        // Compute jobs_scroll: keep the selected agent within the visible window.
+        let jobs_sel = if sel >= pane_count && sel < pane_count + app.jobs.len() {
+            sel - pane_count
+        } else {
+            usize::MAX
+        };
+        let prev_js = app.jobs_scroll_offset;
+        let jobs_scroll = if max_vis == 0 {
+            0
+        } else if jobs_sel == usize::MAX {
+            prev_js.min(app.jobs.len().saturating_sub(max_vis))
+        } else if jobs_sel < prev_js {
+            jobs_sel
+        } else if jobs_sel >= prev_js + max_vis {
+            jobs_sel + 1 - max_vis
+        } else {
+            prev_js
+        };
+        app.jobs_scroll_offset = jobs_scroll;
+
+        if max_vis > 0 || remaining >= 1 {
+            let header = format!("agents ({})", app.jobs.len());
+            lines.push(titled_sep(&header, area_w));
+
+            if jobs_scroll > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("  ↑ {} above", jobs_scroll),
+                    Style::default().fg(Color::DarkGray).bg(sidebar_bg),
+                )));
+            }
+
+            let mut shown = 0;
+            for (job_idx, job) in app.jobs.iter().enumerate().skip(jobs_scroll) {
+                if shown >= max_vis { break; }
+
+                let global_idx = pane_count + job_idx;
+                let is_sel = global_idx == sel && app.is_focused;
+
+                // Accent and row background based on status
+                const BLOCKED_ACCENT: Color = Color::Rgb(200, 130, 30);
+                const WORKING_ACCENT: Color = Color::Rgb(50,  160,  70);
+                const IDLE_ACCENT:    Color = Color::Rgb(80,   85, 105);
+
+                let accent = match job.status {
+                    crate::jobs::JobStatus::Blocked  => BLOCKED_ACCENT,
+                    crate::jobs::JobStatus::Working  => WORKING_ACCENT,
+                    _                                => IDLE_ACCENT,
+                };
+                let status_fg = accent;
+
+                let row_bg: Color = if is_sel {
+                    SEL_BG
+                } else if job.status == crate::jobs::JobStatus::Blocked {
+                    if app.blink_phase { Color::Rgb(50, 30, 5) } else { Color::Rgb(32, 22, 8) }
+                } else {
+                    ROW_BG
+                };
+
+                let sp   = |fg: Color| Style::default().fg(fg).bg(row_bg);
+                let base = Style::default().bg(row_bg);
+                let fill = || Span::styled(" ".repeat(area_w), base);
+
+                // ── Line 1: status icon + name + display num ──────────────────
+                let icon = job.status.icon();
+                let num_str = format!("⧉{}", job.display_num);
+                let name_budget = inner_w.saturating_sub(2 + 2 + num_str.len() + 1);
+                let name_short = truncate(&job.name, name_budget);
+                let padding = inner_w
+                    .saturating_sub(2 + name_short.chars().count() + 2 + num_str.len());
+                lines.push(Line::from(vec![
+                    Span::styled(if is_sel { "▌" } else { " " }, sp(status_fg)),
+                    Span::styled(format!(" {} ", icon), sp(status_fg)),
+                    Span::styled(name_short.clone(),
+                        Style::default().fg(Color::Rgb(200, 205, 220)).bg(row_bg)
+                            .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
+                    Span::styled(" ".repeat(padding), base),
+                    Span::styled(num_str, sp(Color::Rgb(80, 85, 105))),
+                    fill(),
+                ]).style(base));
+
+                // ── Line 2: needs (blocked) or detail (working) ───────────────
+                let line2_text = if job.status == crate::jobs::JobStatus::Blocked {
+                    job.needs.as_deref()
+                        .map(|n| format!("  needs: {}", n))
+                        .unwrap_or_else(|| format!("  {}", job.detail))
+                } else {
+                    format!("  {}", job.detail)
+                };
+                let line2_fg = if job.status == crate::jobs::JobStatus::Blocked {
+                    Color::Rgb(220, 175, 100)
+                } else {
+                    Color::Rgb(120, 125, 145)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        truncate(&line2_text, inner_w.saturating_sub(1)),
+                        sp(line2_fg)),
+                    fill(),
+                ]).style(base));
+
+                // ── Line 3: cwd + age ─────────────────────────────────────────
+                let age = format_age(job.age_secs());
+                let cwd_short = {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let s = job.cwd.to_string_lossy();
+                    if s.starts_with(&home) {
+                        format!("~{}", &s[home.len()..])
+                    } else {
+                        s.to_string()
+                    }
+                };
+                let meta = format!("  {} · {}", cwd_short, age);
+                lines.push(Line::from(vec![
+                    Span::styled(truncate(&meta, inner_w.saturating_sub(1)),
+                        sp(Color::Rgb(65, 68, 85))),
+                    fill(),
+                ]).style(base));
+
+                // ── Separator ─────────────────────────────────────────────────
+                lines.push(Line::from(Span::styled(
+                    " ".repeat(area_w),
+                    Style::default().bg(sidebar_bg),
+                )));
+
+                shown += 1;
+            }
+
+            let clipped = app.jobs.len().saturating_sub(jobs_scroll + shown);
+            if clipped > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("  ↓ {} more", clipped),
+                    Style::default().fg(Color::DarkGray).bg(sidebar_bg),
+                )));
+            }
+        }
+    }
+
     app.pane_click_rows = click_rows;
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(sidebar_bg)),
         area,
     );
+}
+
+fn format_age(secs: i64) -> String {
+    if secs < 60        { "just now".to_string() }
+    else if secs < 3600 { format!("{}m ago", secs / 60) }
+    else if secs < 86400 { format!("{}h ago", secs / 3600) }
+    else                { format!("{}d ago", secs / 86400) }
 }
 
 fn key(k: &'static str) -> Span<'static> {
@@ -801,16 +958,19 @@ fn render_global_info(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     match &app.mode {
         Mode::Normal | Mode::ActionHints => {
+            let is_job = app.selected_job().is_some();
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(vec![
                         key("j/k"), hint(" nav"), sep(),
-                        key("Enter"), hint(" focus"), sep(),
+                        if is_job { key("Enter") } else { key("Enter") },
+                        hint(if is_job { " open" } else { " focus" }), sep(),
                         key("1-9"), hint(" jump"),
                     ]),
                     Line::from(vec![
-                        key("i"), hint(" send"), sep(),
-                        key("l"), hint(" actions"), sep(),
+                        key("i"), hint(if is_job { " reply" } else { " send" }), sep(),
+                        if is_job { key("r") } else { key("l") },
+                        hint(if is_job { " resume" } else { " actions" }), sep(),
                         key("w"), hint(" wt"), sep(),
                         key("c"), hint(" new"), sep(),
                         key("e"), hint(" edit"), sep(),

@@ -126,6 +126,8 @@ pub enum ActionItem {
     MergePR,
     ClosePR,
     DeleteWorktree { worktree_path: String, repo_root: String },
+    /// Send arbitrary text to the selected pane or job (used for smart choice menus)
+    SendText { label: String, text: String },
 }
 
 impl ActionItem {
@@ -137,6 +139,7 @@ impl ActionItem {
             Self::ClosePR     => "Close PR   (gh pr close)".into(),
             Self::DeleteWorktree { worktree_path, .. } =>
                 format!("Delete worktree  ({})", worktree_path),
+            Self::SendText { label, .. } => label.clone(),
         }
     }
 }

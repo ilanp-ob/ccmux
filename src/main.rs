@@ -1,6 +1,7 @@
 mod config;
 mod detection;
 mod git;
+mod jobs;
 mod notify;
 mod session;
 mod sidebar;
@@ -70,6 +71,12 @@ enum Cmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Attach directly to a running daemon agent via its PTY socket
+    #[command(name = "pty-attach", hide = true)]
+    PtyAttach {
+        /// Short session ID (8-char daemonShort from roster.json)
+        session: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -83,6 +90,7 @@ fn main() -> Result<()> {
         Cmd::AutoOpen { window, server } => run_auto_open(window, server),
         Cmd::Close { server } => run_close(server),
         Cmd::Setup { server } => run_setup(server),
+        Cmd::PtyAttach { session } => run_pty_attach(&session),
     }
 }
 
@@ -310,6 +318,10 @@ fn run_sidebar_loop(
         }
 
         if app.tick_status() {
+            needs_redraw = true;
+        }
+
+        if app.tick_jobs() {
             needs_redraw = true;
         }
 
@@ -570,5 +582,53 @@ fn run_setup(server: Option<String>) -> Result<()> {
     println!("To disable:  ccmux close  (closes all sidebars)");
     println!("             tmux set-option -g @ccmux_sticky 0");
 
+    Ok(())
+}
+
+fn run_pty_attach(session_short: &str) -> Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
+
+    let sock_path = jobs::pty_sock_for_session(session_short)
+        .filter(|p| std::path::Path::new(p).exists())
+        .ok_or_else(|| anyhow::anyhow!(
+            "No live PTY socket for session {}. Use `claude agents` to attach.",
+            session_short
+        ))?;
+
+    let mut sock = UnixStream::connect(&sock_path)?;
+    let mut sock_write = sock.try_clone()?;
+
+    enable_raw_mode()?;
+
+    // Thread: socket → stdout
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        loop {
+            match sock.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => { let _ = out.write_all(&buf[..n]); let _ = out.flush(); }
+            }
+        }
+    });
+
+    // Main thread: stdin → socket (until reader thread exits)
+    let stdin = std::io::stdin();
+    let mut buf = [0u8; 256];
+    loop {
+        if reader.is_finished() { break; }
+        use std::io::BufRead;
+        // Non-blocking: just try to read with a short timeout via select on raw fd
+        match stdin.lock().read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => { if sock_write.write_all(&buf[..n]).is_err() { break; } }
+        }
+    }
+
+    disable_raw_mode()?;
+    println!("\r\n[detached from {}]", session_short);
     Ok(())
 }
