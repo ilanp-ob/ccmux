@@ -138,6 +138,8 @@ pub struct App {
     /// Window IDs that have a pending @ccmux_alert (notified but not yet focused).
     pub alerted_windows: HashSet<String>,
     last_alerts_tick: Instant,
+    /// True after the first tick_alerts reconciliation pass clears stale flags from prior runs.
+    alerts_reconciled: bool,
     /// When the current `message` was set — used to auto-clear it after ~3 s.
     message_shown_at: Option<Instant>,
     /// ccmux's own CPU% and RSS — polled every 5 s and shown in the footer.
@@ -235,6 +237,7 @@ impl App {
             last_global_info_tick: Instant::now(),
             alerted_windows: HashSet::new(),
             last_alerts_tick: Instant::now(),
+            alerts_reconciled: false,
             message_shown_at: None,
             own_cpu_pct: 0.0,
             own_rss_mb: 0.0,
@@ -857,6 +860,11 @@ impl App {
         }
         self.last_alerts_tick = Instant::now();
 
+        // On the very first tick after startup, reconcile: clear any stale @ccmux_alert
+        // flags from the previous sidebar run. Keep only genuine WaitingInput alerts.
+        let first_run = !self.alerts_reconciled;
+        self.alerts_reconciled = true;
+
         let tmux = Tmux::new(self.managed_server.clone());
         let window_ids: HashSet<String> = self.groups.iter()
             .flat_map(|g| g.panes.iter())
@@ -866,14 +874,19 @@ impl App {
         let mut new_alerted: HashSet<String> = HashSet::new();
         for wid in &window_ids {
             if tmux.get_window_var(wid, "@ccmux_alert").as_deref() == Some("1") {
-                // Don't surface a stale alert if the session is currently working/thinking.
-                // This handles sidebar restarts where @ccmux_alert survived from a prior run.
-                let window_busy = self.groups.iter()
+                let window_waiting = self.groups.iter()
+                    .flat_map(|g| g.panes.iter())
+                    .filter(|p| &p.window_id == wid)
+                    .any(|p| p.status == ClaudeCodeStatus::WaitingInput);
+                let window_busy = !window_waiting && self.groups.iter()
                     .flat_map(|g| g.panes.iter())
                     .filter(|p| &p.window_id == wid)
                     .any(|p| matches!(p.status,
                         ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking));
-                if window_busy {
+
+                if window_busy || (first_run && !window_waiting) {
+                    // Clear: session is actively working, OR it's the startup reconciliation
+                    // pass and the session has no active dialog (stale "task completed" flag).
                     let _ = tmux.cmd()
                         .args(["set-window-option", "-ut", wid, "@ccmux_alert"])
                         .status();
