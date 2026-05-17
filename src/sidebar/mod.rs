@@ -504,9 +504,10 @@ impl App {
             .map(|j| (j.cwd.clone(), j.status.clone()))
             .collect();
 
-        // Collect (window_id) for windows where a busy→attention transition occurred,
-        // so we can set @ccmux_alert after the loop without holding a borrow on self.groups.
+        // Collect window IDs for alert transitions. newly_alerted: set the flag.
+        // newly_cleared: clear the flag (WaitingInput dismissed without user focusing).
         let mut newly_alerted: Vec<String> = Vec::new();
+        let mut newly_cleared: Vec<String> = Vec::new();
 
         for (pane_id, new_status, content) in updates {
             for group in &mut self.groups {
@@ -528,12 +529,20 @@ impl App {
                             new_status.clone()
                         };
                         if effective_status != pane.status {
+                            let was_waiting = pane.status == ClaudeCodeStatus::WaitingInput;
                             let was_busy = matches!(pane.status,
                                 ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking);
                             let now_needs_attention = matches!(effective_status,
                                 ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
-                            if was_busy && now_needs_attention {
+                            let now_waiting = effective_status == ClaudeCodeStatus::WaitingInput;
+                            // Alert on Working/Thinking→Idle/WaitingInput, and also on any
+                            // transition into WaitingInput (catches agents action items detected
+                            // on startup or from a session that was already idle).
+                            if (was_busy && now_needs_attention) || (now_waiting && !was_busy) {
                                 newly_alerted.push(group.window_id.clone());
+                            } else if was_waiting && !now_waiting {
+                                // WaitingInput dismissed (e.g. user pressed Esc) — clear blink.
+                                newly_cleared.push(group.window_id.clone());
                             }
                             pane.status = effective_status;
                             changed = true;
@@ -548,6 +557,12 @@ impl App {
             let _ = tmux.cmd()
                 .args(["set-window-option", "-t", &window_id, "@ccmux_alert", "1"])
                 .status();
+        }
+        for window_id in newly_cleared {
+            let _ = tmux.cmd()
+                .args(["set-window-option", "-ut", &window_id, "@ccmux_alert"])
+                .status();
+            self.alerted_windows.remove(&window_id);
         }
 
         changed
