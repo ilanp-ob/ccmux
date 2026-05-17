@@ -34,6 +34,16 @@ fn is_waiting_for_input(content: &str) -> bool {
     }) {
         return true;
     }
+    // Claude agents action items: "~ [N]: option | option"
+    // These appear above the idle prompt after a run completes, so scan a wider
+    // window than the tail used for footer-style dialogs.
+    let wide: Vec<&str> = content.lines().rev().take(20).collect();
+    if wide.iter().any(|line| {
+        let t = line.trim();
+        t.starts_with("~ [") && t.contains("]:")
+    }) {
+        return true;
+    }
     false
 }
 
@@ -169,6 +179,13 @@ mod tests {
     fn waiting_input_numbered_selection_no_footer() {
         // RTK tool approval dialog — no "Tab to amend" footer
         let content = "This command requires approval\nDo you want to proceed?\n> 1. Yes\n  2. Yes, and don't ask again for: rtk git *\n  3. No";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn waiting_input_agents_action_items() {
+        let content = "or [b] Post note in #alerts\n---\nWhat would you like to do?\n~ [3]: d dismiss | b post Slack reply\n~ [5]: a comment on OPS-123\n---\n* Cogitated for 18m\n─────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
         assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
     }
