@@ -11,7 +11,7 @@ fn is_waiting_for_input(content: &str) -> bool {
     // bottom of the terminal. Scanning the full capture causes false positives
     // when Claude displays code that contains these exact string literals
     // (e.g. a diff of detection.rs itself showing `[y/n]` or the footer phrases).
-    let tail: Vec<&str> = content.lines().rev().take(6).collect();
+    let tail: Vec<&str> = content.lines().rev().take(8).collect();
     let tail_text = tail.join("\n");
 
     if tail_text.contains("[y/n]") || tail_text.contains("[Y/n]") {
@@ -21,6 +21,17 @@ fn is_waiting_for_input(content: &str) -> bool {
         return true;
     }
     if tail_text.contains("Enter to select · ↑/↓ to navigate") {
+        return true;
+    }
+    // Numbered selection dialogs (e.g. RTK tool approval) use "> N." or "❯ N."
+    // as a cursor prefix without a standard footer line.
+    if tail.iter().any(|line| {
+        let t = line.trim();
+        (t.starts_with("> ") || t.starts_with("\u{276F} "))
+            && t.len() > 3
+            && t.chars().nth(2).map(|c| c.is_ascii_digit()).unwrap_or(false)
+            && t.chars().nth(3) == Some('.')
+    }) {
         return true;
     }
     false
@@ -152,6 +163,14 @@ mod tests {
     fn waiting_input_even_when_tool_also_running() {
         let content = "Bash(find ...)\n└ Waiting…\nDo you want to proceed?\n❯ 1. Yes\nEsc to cancel · Tab to amend · ctrl+e to explain";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn waiting_input_numbered_selection_no_footer() {
+        // RTK tool approval dialog — no "Tab to amend" footer
+        let content = "This command requires approval\nDo you want to proceed?\n> 1. Yes\n  2. Yes, and don't ask again for: rtk git *\n  3. No";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
     }
 
     #[test]

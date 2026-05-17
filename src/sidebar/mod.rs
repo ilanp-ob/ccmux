@@ -504,6 +504,10 @@ impl App {
             .map(|j| (j.cwd.clone(), j.status.clone()))
             .collect();
 
+        // Collect (window_id) for windows where a busy→attention transition occurred,
+        // so we can set @ccmux_alert after the loop without holding a borrow on self.groups.
+        let mut newly_alerted: Vec<String> = Vec::new();
+
         for (pane_id, new_status, content) in updates {
             for group in &mut self.groups {
                 for pane in &mut group.panes {
@@ -524,6 +528,13 @@ impl App {
                             new_status.clone()
                         };
                         if effective_status != pane.status {
+                            let was_busy = matches!(pane.status,
+                                ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking);
+                            let now_needs_attention = matches!(effective_status,
+                                ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
+                            if was_busy && now_needs_attention {
+                                newly_alerted.push(group.window_id.clone());
+                            }
                             pane.status = effective_status;
                             changed = true;
                         }
@@ -531,6 +542,12 @@ impl App {
                 }
             }
             self.pane_content_cache.insert(pane_id, content);
+        }
+
+        for window_id in newly_alerted {
+            let _ = tmux.cmd()
+                .args(["set-window-option", "-t", &window_id, "@ccmux_alert", "1"])
+                .status();
         }
 
         changed
@@ -1229,7 +1246,7 @@ impl App {
         false
     }
 
-    /// Advance the thinking spinner frame every 120 ms while any pane is Thinking.
+    /// Advance the thinking spinner frame every 500 ms while any pane is Thinking.
     /// Returns true when the frame advances (triggers a redraw).
     pub fn tick_thinking(&mut self) -> bool {
         let any_thinking = self.groups.iter()
@@ -1239,7 +1256,7 @@ impl App {
         if !any_thinking {
             return false;
         }
-        if self.last_thinking_tick.elapsed() < Duration::from_millis(120) {
+        if self.last_thinking_tick.elapsed() < Duration::from_millis(500) {
             return false;
         }
         self.last_thinking_tick = Instant::now();
