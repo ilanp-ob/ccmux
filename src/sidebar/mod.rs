@@ -535,13 +535,16 @@ impl App {
                             let now_needs_attention = matches!(effective_status,
                                 ClaudeCodeStatus::Idle | ClaudeCodeStatus::WaitingInput);
                             let now_waiting = effective_status == ClaudeCodeStatus::WaitingInput;
+                            let now_busy = matches!(effective_status,
+                                ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking);
                             // Alert on Working/Thinking→Idle/WaitingInput, and also on any
                             // transition into WaitingInput (catches agents action items detected
                             // on startup or from a session that was already idle).
                             if (was_busy && now_needs_attention) || (now_waiting && !was_busy) {
                                 newly_alerted.push(group.window_id.clone());
-                            } else if was_waiting && !now_waiting {
-                                // WaitingInput dismissed (e.g. user pressed Esc) — clear blink.
+                            } else if now_busy || (was_waiting && !now_waiting) {
+                                // Session went back to working, or WaitingInput was dismissed
+                                // (e.g. user pressed Esc) — clear any stale alert.
                                 newly_cleared.push(group.window_id.clone());
                             }
                             pane.status = effective_status;
@@ -863,7 +866,20 @@ impl App {
         let mut new_alerted: HashSet<String> = HashSet::new();
         for wid in &window_ids {
             if tmux.get_window_var(wid, "@ccmux_alert").as_deref() == Some("1") {
-                new_alerted.insert(wid.clone());
+                // Don't surface a stale alert if the session is currently working/thinking.
+                // This handles sidebar restarts where @ccmux_alert survived from a prior run.
+                let window_busy = self.groups.iter()
+                    .flat_map(|g| g.panes.iter())
+                    .filter(|p| &p.window_id == wid)
+                    .any(|p| matches!(p.status,
+                        ClaudeCodeStatus::Working | ClaudeCodeStatus::Thinking));
+                if window_busy {
+                    let _ = tmux.cmd()
+                        .args(["set-window-option", "-ut", wid, "@ccmux_alert"])
+                        .status();
+                } else {
+                    new_alerted.insert(wid.clone());
+                }
             }
         }
 
