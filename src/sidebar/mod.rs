@@ -563,6 +563,7 @@ impl App {
             let _ = tmux.cmd()
                 .args(["set-window-option", "-t", &window_id, "@ccmux_alert", "1"])
                 .status();
+            self.alerted_windows.insert(window_id.clone());
         }
         for window_id in newly_cleared {
             let _ = tmux.cmd()

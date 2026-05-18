@@ -11,13 +11,17 @@ fn is_waiting_for_input(content: &str) -> bool {
     // bottom of the terminal. Scanning the full capture causes false positives
     // when Claude displays code that contains these exact string literals
     // (e.g. a diff of detection.rs itself showing `[y/n]` or the footer phrases).
-    let tail: Vec<&str> = content.lines().rev().take(8).collect();
+    let tail: Vec<&str> = content.lines().rev().take(12).collect();
     let tail_text = tail.join("\n");
 
     if tail_text.contains("[y/n]") || tail_text.contains("[Y/n]") {
         return true;
     }
     if tail_text.contains("Tab to amend · ctrl+e to explain") {
+        return true;
+    }
+    // Subagent tool-approval footer (no "ctrl+e to explain" suffix)
+    if tail_text.contains("Esc to cancel · Tab to amend") {
         return true;
     }
     if tail_text.contains("Enter to select · ↑/↓ to navigate") {
@@ -186,6 +190,22 @@ mod tests {
     #[test]
     fn waiting_input_agents_action_items() {
         let content = "or [b] Post note in #alerts\n---\nWhat would you like to do?\n~ [3]: d dismiss | b post Slack reply\n~ [5]: a comment on OPS-123\n---\n* Cogitated for 18m\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn waiting_input_subagent_dialog_with_extended_thinking() {
+        // Subagent tool-approval footer ("Esc to cancel · Tab to amend", no ctrl+e)
+        // pushed down by Smooshing spinner + separator + user message below the dialog
+        let content = "how does it work in the real aws...\n\
+            ─────\n\
+            · Smooshing… (14m 57s · ↓ 2.9k tokens · thought for 15s)\n\
+            Esc to cancel · Tab to amend\n\
+            3. No\n\
+            2. Yes, allow reading from api/\n\
+            > 1. Yes\n\
+            Do you want to proceed?";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
         assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
     }

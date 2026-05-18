@@ -479,10 +479,10 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 // OFF phase: subtle tint so the row still reads as "needs attention".
                 let row_bg: Color = if is_sel {
                     SEL_BG
-                } else if is_alerted {
-                    if blink { Color::Rgb(170, 65, 10) } else { Color::Rgb(38, 22, 10) }
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     if blink { Color::Rgb(130, 115, 10) } else { Color::Rgb(30, 28, 10) }
+                } else if is_alerted {
+                    if blink { Color::Rgb(170, 65, 10) } else { Color::Rgb(38, 22, 10) }
                 } else {
                     ROW_BG
                 };
@@ -496,17 +496,17 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let wait_fg  = if blink { Color::Rgb(255, 245, 150) } else { Color::Yellow };
                 let sel_span = if is_sel {
                     Span::styled("▌", sp(sc))
-                } else if is_alerted {
-                    Span::styled("▌", sp(alert_fg))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     Span::styled("▌", sp(wait_fg))
+                } else if is_alerted {
+                    Span::styled("▌", sp(alert_fg))
                 } else {
                     Span::styled(" ", base)
                 };
-                let name_fg = if !is_sel && is_alerted {
-                    alert_fg
-                } else if !is_sel && item.status == ClaudeCodeStatus::WaitingInput {
+                let name_fg = if !is_sel && item.status == ClaudeCodeStatus::WaitingInput {
                     wait_fg
+                } else if !is_sel && is_alerted {
+                    alert_fg
                 } else {
                     Color::White
                 };
@@ -536,10 +536,10 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
 
                 let cont_pipe: Option<Span> = if is_sel {
                     Some(Span::styled("▌", sp(sc)))
-                } else if is_alerted {
-                    Some(Span::styled("▌", sp(alert_fg)))
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     Some(Span::styled("▌", sp(wait_fg)))
+                } else if is_alerted {
+                    Some(Span::styled("▌", sp(alert_fg)))
                 } else {
                     None
                 };
@@ -577,18 +577,18 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         Span::styled(status_label, sp(sc)),
                         fill(),
                     ]).style(base));
-                } else if is_alerted {
-                    lines.push(Line::from(vec![
-                        bar3(), Span::styled("▌", sp(alert_fg)),
-                        Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(55, 58, 68))),
-                        Span::styled("● Done", sp(alert_fg)),
-                        fill(),
-                    ]).style(base));
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     lines.push(Line::from(vec![
                         bar3(), Span::styled("▌", sp(wait_fg)),
                         Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(80, 78, 40))),
                         Span::styled("⚠ Waiting", sp(wait_fg)),
+                        fill(),
+                    ]).style(base));
+                } else if is_alerted {
+                    lines.push(Line::from(vec![
+                        bar3(), Span::styled("▌", sp(alert_fg)),
+                        Span::styled(format!(" {} ", item.path_short), sp(Color::Rgb(55, 58, 68))),
+                        Span::styled("● Done", sp(alert_fg)),
                         fill(),
                     ]).style(base));
                 } else {
