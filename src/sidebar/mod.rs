@@ -545,9 +545,12 @@ impl App {
                             // on startup or from a session that was already idle).
                             if (was_busy && now_needs_attention) || (now_waiting && !was_busy) {
                                 newly_alerted.push(group.window_id.clone());
-                            } else if now_busy || (was_waiting && !now_waiting) {
-                                // Session went back to working, or WaitingInput was dismissed
-                                // (e.g. user pressed Esc) — clear any stale alert.
+                            } else if (now_busy && !was_waiting) || (was_waiting && !now_waiting) {
+                                // Session went back to working (from non-waiting state), or
+                                // WaitingInput was dismissed (e.g. user pressed Esc) — clear
+                                // any stale alert. Exclude was_waiting→now_busy to avoid
+                                // clearing on detect_changed_status false-negatives when a
+                                // dialog is still present but the timer update flipped content.
                                 newly_cleared.push(group.window_id.clone());
                             }
                             pane.status = effective_status;

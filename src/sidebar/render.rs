@@ -469,7 +469,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let sc = status_color(&item.status);
                 let icon = item.icon;
                 let is_alerted = app.alerted_windows.contains(&item.window_id);
-                const ALERT_COLOR: Color = Color::Rgb(255, 110, 40);
+                const ALERT_COLOR: Color = Color::Rgb(60, 180, 180);
                 let needs_attention = is_alerted || item.status == ClaudeCodeStatus::WaitingInput;
                 // Only show selection styling when the sidebar itself has focus.
                 let is_sel = item.is_sel && app.is_focused;
@@ -482,7 +482,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 } else if item.status == ClaudeCodeStatus::WaitingInput {
                     if blink { Color::Rgb(130, 115, 10) } else { Color::Rgb(30, 28, 10) }
                 } else if is_alerted {
-                    if blink { Color::Rgb(170, 65, 10) } else { Color::Rgb(38, 22, 10) }
+                    if blink { Color::Rgb(10, 80, 80) } else { Color::Rgb(10, 35, 35) }
                 } else {
                     ROW_BG
                 };
@@ -492,7 +492,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 let fill = || Span::styled(" ".repeat(area_w), base);
 
                 let win_span = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
-                let alert_fg = if blink { Color::Rgb(255, 220, 180) } else { ALERT_COLOR };
+                let alert_fg = if blink { Color::Rgb(180, 240, 240) } else { ALERT_COLOR };
                 let wait_fg  = if blink { Color::Rgb(255, 245, 150) } else { Color::Yellow };
                 let sel_span = if is_sel {
                     Span::styled("▌", sp(sc))
