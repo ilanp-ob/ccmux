@@ -178,6 +178,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn pane_display_name(pane: &crate::session::DetectedPane) -> String {
+    if !pane.window_name.is_empty() {
+        return pane.window_name.clone();
+    }
     pane.current_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

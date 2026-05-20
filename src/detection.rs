@@ -24,7 +24,9 @@ fn is_waiting_for_input(content: &str) -> bool {
     if tail_text.contains("Esc to cancel · Tab to amend") {
         return true;
     }
-    if tail_text.contains("Enter to select · ↑/↓ to navigate") {
+    // Covers "Enter to select · ↑/↓ to navigate" and
+    // "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"
+    if tail_text.contains("Enter to select ·") {
         return true;
     }
     // Numbered selection dialogs (e.g. RTK tool approval) use "> N." or "❯ N."
