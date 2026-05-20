@@ -533,7 +533,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     Span::styled(item.name.clone(),
                         Style::default().fg(name_fg).add_modifier(name_mod).bg(row_bg)),
                     Span::styled(" ".repeat(pad), base),
-                    Span::styled(item.num_str.clone(), sp(Color::Rgb(110, 110, 125))),
+                    Span::styled(item.num_str.clone(), sp(item.accent)),
                     fill(),
                 ]).style(base));
 
