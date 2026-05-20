@@ -107,7 +107,7 @@ impl Tmux {
             .args([
                 "list-panes", "-s", "-t", session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_pid}\t#{@ccmux_color}",
+                "#{pane_id}\t#{pane_current_command}\t#{window_id}\t#{window_name}\t#{window_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_pid}\t#{@ccmux_color}\t#{@ccmux_name}",
             ])
             .output()
             .context("tmux list-panes failed")?;
@@ -128,13 +128,28 @@ impl Tmux {
         let proc_tree = build_process_tree();
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.splitn(9, '\t').collect();
+            let parts: Vec<&str> = line.splitn(10, '\t').collect();
             if parts.len() < 7 { continue; }
 
             let pane_id     = parts[0].to_string();
             let command     = parts[1].to_string();
             let window_id   = parts[2].to_string();
             let window_name = parts[3].to_string();
+            // Use @ccmux_name as the authoritative display name — it's a user-defined
+            // tmux variable that automatic-rename never touches. Snapshot window_name
+            // on first encounter so it stays stable even if tmux auto-renames the window.
+            let stored_name = parts.get(9)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let display_name = match stored_name {
+                Some(n) => n,
+                None => {
+                    let _ = self.cmd()
+                        .args(["set-window-option", "-t", &parts[2], "@ccmux_name", &window_name])
+                        .output();
+                    window_name.clone()
+                }
+            };
             let window_index = parts[4].to_string();
             let pane_active = parts[5] == "1";
             let current_path = PathBuf::from(parts[6]);
@@ -198,7 +213,7 @@ impl Tmux {
             let pane = DetectedPane {
                 pane_id,
                 window_id: window_id.clone(),
-                window_name: window_name.clone(),
+                window_name: display_name.clone(),
                 window_index,
                 pane_active,
                 current_command: command,
@@ -222,7 +237,7 @@ impl Tmux {
                     .output();
                 groups.push(WindowGroup {
                     window_id,
-                    window_name,
+                    window_name: display_name,
                     server: self.server.clone(),
                     panes: vec![pane],
                     extra_panes: Vec::new(),

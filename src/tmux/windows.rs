@@ -24,6 +24,9 @@ impl Tmux {
         let _ = self.cmd()
             .args(["set-window-option", "-t", &window_id, "automatic-rename", "off"])
             .status();
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", &window_id, "@ccmux_name", window_name])
+            .status();
         // Explicit cd to handle any working-dir race
         let cd_cmd = format!("cd '{}'", path_str.replace('\'', "'\\''"));
         let _ = self.cmd()
@@ -55,6 +58,9 @@ impl Tmux {
         let window_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let _ = self.cmd()
             .args(["set-window-option", "-t", &window_id, "automatic-rename", "off"])
+            .status();
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", &window_id, "@ccmux_name", window_name])
             .status();
         Ok(window_id)
     }
@@ -123,6 +129,9 @@ impl Tmux {
             .context("tmux rename-window failed")?;
         let _ = self.cmd()
             .args(["set-window-option", "-t", window_id, "automatic-rename", "off"])
+            .status();
+        let _ = self.cmd()
+            .args(["set-window-option", "-t", window_id, "@ccmux_name", new_name])
             .status();
         Ok(())
     }
