@@ -59,6 +59,9 @@ fn is_waiting_for_input(content: &str) -> bool {
             for prev in lines_conv[..i - 1].iter().rev().take(5) {
                 let t = prev.trim();
                 if t.is_empty() { continue; }
+                // "Interrupted · What should Claude do instead?" is Claude Code's
+                // standard interrupt banner, not a genuine conversational question.
+                if t.contains("Interrupted") { return false; }
                 return t.ends_with('?');
             }
             break;
@@ -304,6 +307,15 @@ mod tests {
     fn waiting_input_conversational_question_with_blank_line_above_sep() {
         let content = "Want me to rerun with verbose output?\n\n─────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn no_false_positive_interrupted_banner() {
+        // "Interrupted · What should Claude do instead?" ends with '?' but is not
+        // a conversational question — it's Claude Code's standard interrupt banner.
+        let content = "Interrupted · What should Claude do instead?\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::Idle);
     }
 
     #[test]
