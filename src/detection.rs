@@ -50,6 +50,20 @@ fn is_waiting_for_input(content: &str) -> bool {
     }) {
         return true;
     }
+    // Conversational question: the last non-empty line above the most recent ─────\n❯
+    // prompt ends with '?', meaning Claude asked a natural-language follow-up question.
+    // Scan in reverse so we anchor to the bottom-most boundary, not stale scrollback.
+    let lines_conv: Vec<&str> = content.lines().collect();
+    for (i, line) in lines_conv.iter().enumerate().rev() {
+        if line.contains('❯') && i > 0 && lines_conv[i - 1].contains('─') {
+            for prev in lines_conv[..i - 1].iter().rev().take(5) {
+                let t = prev.trim();
+                if t.is_empty() { continue; }
+                return t.ends_with('?');
+            }
+            break;
+        }
+    }
     false
 }
 
@@ -277,6 +291,32 @@ mod tests {
     fn border_not_directly_above_prompt_is_unknown() {
         let content = "─────\nsome text\n❯ hello";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Unknown);
+    }
+
+    #[test]
+    fn waiting_input_conversational_question() {
+        let content = "Here's the Slack draft.\nWant me to adjust the tone?\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn waiting_input_conversational_question_with_blank_line_above_sep() {
+        let content = "Want me to rerun with verbose output?\n\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn no_false_positive_statement_above_prompt() {
+        let content = "I have updated the file.\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn no_false_positive_uses_bottom_most_boundary() {
+        // Scrollback contains an old question, but the current prompt has a statement above it.
+        let content = "Old question?\n─────\n❯ \nI updated the file.\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
     }
 
     #[test]

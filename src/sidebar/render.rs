@@ -276,7 +276,7 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
     let inner_w = area_w.saturating_sub(2);
 
     // Auto-scroll: keep selected item in view.
-    let per_screen = (area_h / 4).max(1);
+    let per_screen = (area_h / 5).max(1);
     if sel < app.scroll_offset {
         app.scroll_offset = sel;
     } else if sel >= app.scroll_offset + per_screen {
@@ -410,6 +410,13 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                 accent,
             }));
         }
+    }
+
+    // Scroll correction: if the selected item wasn't rendered (items above it consumed
+    // all available rows), snap scroll_offset to sel so it appears on the next frame.
+    let sel_in_view = entries.iter().any(|e| matches!(e, Entry::Item(ri) if ri.pane_idx == sel));
+    if !sel_in_view {
+        app.scroll_offset = sel;
     }
 
     // ── Phase 2: expand non-selected items into spare rows ────────────────────

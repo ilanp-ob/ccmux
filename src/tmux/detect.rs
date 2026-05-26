@@ -94,6 +94,52 @@ fn classify_descendant(
     None
 }
 
+/// Return the full args string for the Claude-type process in this pane.
+/// Checks the pane process itself first, then walks descendants.
+fn find_claude_args(
+    root_pid: u32,
+    pane_cmd: &str,
+    tree: &std::collections::HashMap<u32, Vec<(u32, String)>>,
+    configured: &[String],
+) -> Option<String> {
+    if classify_command(pane_cmd, configured).is_some() {
+        return get_full_args(root_pid);
+    }
+    find_claude_args_in_tree(root_pid, tree, configured, 0)
+}
+
+fn find_claude_args_in_tree(
+    root: u32,
+    tree: &std::collections::HashMap<u32, Vec<(u32, String)>>,
+    configured: &[String],
+    depth: u8,
+) -> Option<String> {
+    if depth > 8 { return None; }
+    for (child_pid, comm) in tree.get(&root)? {
+        if classify_command(comm, configured).is_some() {
+            return get_full_args(*child_pid);
+        }
+        if let Some(args) = find_claude_args_in_tree(*child_pid, tree, configured, depth + 1) {
+            return Some(args);
+        }
+    }
+    None
+}
+
+/// Parse the value of --name from a process args string.
+fn extract_name_flag(args: &str) -> Option<String> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    for i in 0..parts.len().saturating_sub(1) {
+        if parts[i] == "--name" {
+            let val = parts[i + 1].trim_matches('"').trim_matches('\'');
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
 impl Tmux {
     /// Scan all panes in the tmux session, filter to detected commands,
     /// group by window, and assign sequential display numbers.
@@ -135,6 +181,10 @@ impl Tmux {
             let command     = parts[1].to_string();
             let window_id   = parts[2].to_string();
             let window_name = parts[3].to_string();
+            let window_index = parts[4].to_string();
+            let pane_active = parts[5] == "1";
+            let current_path = PathBuf::from(parts[6]);
+            let pane_pid: u32 = parts.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
             // Use @ccmux_name as the authoritative display name — it's a user-defined
             // tmux variable that automatic-rename never touches. Snapshot window_name
             // on first encounter so it stays stable even if tmux auto-renames the window.
@@ -144,16 +194,19 @@ impl Tmux {
             let display_name = match stored_name {
                 Some(n) => n,
                 None => {
+                    // Prefer the Claude --name arg over the current window_name: tmux
+                    // auto-rename may have clobbered the window with a different pane's
+                    // command (e.g. "ol") before ccmux first saw this window.
+                    let name = find_claude_args(pane_pid, &command, &proc_tree, configured_commands)
+                        .as_deref()
+                        .and_then(extract_name_flag)
+                        .unwrap_or_else(|| window_name.clone());
                     let _ = self.cmd()
-                        .args(["set-window-option", "-t", &parts[2], "@ccmux_name", &window_name])
+                        .args(["set-window-option", "-t", &parts[2], "@ccmux_name", &name])
                         .output();
-                    window_name.clone()
+                    name
                 }
             };
-            let window_index = parts[4].to_string();
-            let pane_active = parts[5] == "1";
-            let current_path = PathBuf::from(parts[6]);
-            let pane_pid: u32 = parts.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
             let window_color: Option<String> = parts.get(8)
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
