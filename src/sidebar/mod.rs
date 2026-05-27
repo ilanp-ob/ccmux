@@ -1138,22 +1138,36 @@ impl App {
             let wt = std::path::PathBuf::from(wt_path);
 
             // Try to find an existing tmux window with a pane inside the worktree.
+            // Include pane_id and pane_current_command so we can target the shell pane
+            // directly (not the sidebar) when launching Claude.
             let found = tmux.cmd()
                 .args(["list-panes", "-s", "-t", &self.managed_session,
-                       "-F", "#{window_id}\t#{pane_current_path}"])
+                       "-F", "#{window_id}\t#{pane_current_path}\t#{pane_id}\t#{pane_current_command}"])
                 .output()
                 .ok()
                 .and_then(|out| {
                     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-                    stdout.lines().find_map(|line| {
-                        let mut p = line.splitn(2, '\t');
-                        let wid = p.next()?.trim().to_string();
+                    // Two-pass: first find the window_id, then find the best shell pane in it.
+                    // Pass 1: find a window that has any pane inside the worktree.
+                    let wid = stdout.lines().find_map(|line| {
+                        let mut p = line.splitn(4, '\t');
+                        let wid   = p.next()?.trim().to_string();
                         let ppath = p.next()?.trim().to_string();
                         if ppath.starts_with(wt_path) { Some(wid) } else { None }
-                    })
+                    })?;
+                    // Pass 2: find a non-sidebar pane in that window to use as the send target.
+                    let shell_pane = stdout.lines().find_map(|line| {
+                        let mut p = line.splitn(4, '\t');
+                        let w   = p.next()?.trim().to_string();
+                        let _   = p.next(); // pane_current_path
+                        let pid = p.next()?.trim().to_string();
+                        let cmd = p.next()?.trim().to_string();
+                        if w == wid && !cmd.contains("ccmux") { Some(pid) } else { None }
+                    });
+                    Some((wid, shell_pane))
                 });
 
-            if let Some(wid) = found {
+            if let Some((wid, shell_pane)) = found {
                 let _ = tmux.select_window(&wid);
                 self.set_message(format!("✓ Switched to existing worktree: {}", folder));
                 // Apply options to the already-open window then return.
@@ -1163,12 +1177,19 @@ impl App {
                     Self::spawn_vscode(&wt);
                 }
                 if opts.launch_claude {
-                    let model = AVAILABLE_MODELS[opts.model_idx];
-                    let effort = AVAILABLE_EFFORTS[opts.effort_idx];
-                    let display_name = std::path::Path::new(folder)
-                        .file_name().map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| folder.to_string());
-                    let _ = tmux.send_keys(&wid, &format!("claude --model {} --effort {} --name '{}'", model, effort, display_name));
+                    // Send to the shell pane specifically — NOT the window ID, which would
+                    // target the active pane (often the sidebar after ensure_sidebar_in_window).
+                    // Sending the launch command to the sidebar TUI is a critical bug: 'c' in
+                    // the command triggers start_folder_pick() and the rest of the string
+                    // ends up typed into the filter field.
+                    if let Some(ref pane_id) = shell_pane {
+                        let model = AVAILABLE_MODELS[opts.model_idx];
+                        let effort = AVAILABLE_EFFORTS[opts.effort_idx];
+                        let display_name = std::path::Path::new(folder)
+                            .file_name().map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| folder.to_string());
+                        let _ = tmux.send_keys(pane_id, &format!("claude --model {} --effort {} --name '{}'", model, effort, display_name));
+                    }
                 }
                 self.ensure_sidebar_in_window(&wid, None);
                 self.mode = crate::sidebar::mode::Mode::Normal;
