@@ -1,5 +1,30 @@
 use crate::session::ClaudeCodeStatus;
 
+/// Returns true for completion summary lines such as "✻ Brewed for 3m 30s" or
+/// "* Baked for 6m 22s". These appear at the bottom of a finished session and
+/// should be skipped when scanning backward for a conversational question.
+fn is_completion_summary(line: &str) -> bool {
+    const ORNAMENTS: &[char] = &[
+        '\u{00B7}', // ·
+        '\u{273B}', // ✻
+        '\u{273D}', // ✽
+        '\u{2736}', // ✶
+        '\u{2733}', // ✳
+        '\u{2722}', // ✢
+        '*',
+    ];
+    matches!(line.chars().next(), Some(c) if ORNAMENTS.contains(&c)) && line.contains(" for ")
+}
+
+/// Returns true for plain numbered-option lines such as "1. Show me draft comment".
+/// These appear when Claude presents a menu in conversational text (not a formal
+/// dialog with a footer), and should be skipped to find the question above them.
+fn is_numbered_option_line(line: &str) -> bool {
+    let rest = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    // Must have consumed at least one digit and be followed by ". "
+    rest.len() < line.len() && rest.starts_with(". ")
+}
+
 /// Returns true when the pane content shows a Claude confirmation/permission
 /// dialog that requires the user to respond before Claude can continue.
 ///
@@ -53,15 +78,30 @@ fn is_waiting_for_input(content: &str) -> bool {
     // Conversational question: the last non-empty line above the most recent ─────\n❯
     // prompt ends with '?', meaning Claude asked a natural-language follow-up question.
     // Scan in reverse so we anchor to the bottom-most boundary, not stale scrollback.
+    //
+    // We skip over known "passthrough" line types that may appear between Claude's
+    // question and the idle prompt without themselves being the question:
+    //   • Completion summaries: "✻ Brewed for 3m 30s", "* Baked for 6m 22s"
+    //   • Recap plugin lines:   "* recap: …" and their indented continuations
+    //     (e.g. "  response (1-4). (disable recaps in /config)")
+    //   • Plain numbered options: "1. Show me draft comment", "2. Fix locally"
     let lines_conv: Vec<&str> = content.lines().collect();
     for (i, line) in lines_conv.iter().enumerate().rev() {
         if line.contains('❯') && i > 0 && lines_conv[i - 1].contains('─') {
-            for prev in lines_conv[..i - 1].iter().rev().take(5) {
+            for prev in lines_conv[..i - 1].iter().rev().take(20) {
                 let t = prev.trim();
                 if t.is_empty() { continue; }
                 // "Interrupted · What should Claude do instead?" is Claude Code's
                 // standard interrupt banner, not a genuine conversational question.
                 if t.contains("Interrupted") { return false; }
+                // Skip completion summary lines: start with ornament/asterisk + " for "
+                // e.g. "✻ Brewed for 3m 30s", "* Baked for 6m 22s"
+                if is_completion_summary(t) { continue; }
+                // Skip recap plugin lines and their indented continuations
+                // e.g. "* recap: Reviewing PR…" / "  response (1-4). (disable recaps…)"
+                if t.starts_with("* recap:") || t.contains("disable recaps") { continue; }
+                // Skip plain numbered option lines: "1. Show me draft comment"
+                if is_numbered_option_line(t) { continue; }
                 return t.ends_with('?');
             }
             break;
@@ -341,5 +381,57 @@ mod tests {
     fn static_idle_when_input_field() {
         let content = "● Done\n─────\n❯ hello";
         assert_eq!(detect_static_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    // ── Numbered-option conversational prompts (code-review / recap style) ──
+
+    #[test]
+    fn waiting_input_numbered_options_with_completion_summary() {
+        // Claude outputs a numbered-choice prompt, session ends with "* Baked for…"
+        // No recap. The question above the options should still be detected.
+        let content = "What would you like to do?\n\
+            1. Show me draft comment\n\
+            2. Fix locally\n\
+            3. Already commented/handled\n\
+            4. Unimportant or wrong — dismiss\n\
+            \n\
+            * Baked for 6m 22s\n\
+            ─────\n\
+            ❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn waiting_input_numbered_options_with_recap_and_summary() {
+        // Real-world layout from the screenshot: numbered-choice prompt → completion
+        // summary → recap plugin lines → idle prompt.  The recap injects
+        // "  response (1-4). (disable recaps in /config)" above the separator.
+        let content = "What would you like to do?\n\
+            1. Show me draft comment\n\
+            2. Fix locally\n\
+            3. Already commented/handled\n\
+            4. Unimportant or wrong — dismiss\n\
+            \n\
+            * Baked for 6m 22s\n\
+            \n\
+            * recap: Reviewing PR #11270, which fixes the latest attribute entry.\n\
+            \u{0020}\u{0020}response (1-4). (disable recaps in /config)\n\
+            ─────\n\
+            ❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn no_false_positive_numbered_list_no_question() {
+        // Claude outputs a numbered summary without a preceding question — not a prompt.
+        let content = "Here is what I changed:\n\
+            1. Modified file A\n\
+            2. Modified file B\n\
+            * Baked for 2m\n\
+            ─────\n\
+            ❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
     }
 }
