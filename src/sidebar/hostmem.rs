@@ -27,6 +27,27 @@ pub fn friendly_name(exec_path: &str) -> Option<String> {
     Some(friendly.to_string())
 }
 
+/// Climb the parent-process chain from `start_pid`, returning the first ancestor
+/// that is a macOS `.app` executable. `lookup(pid)` returns `(ppid, comm)` where
+/// `comm` is the executable path. Capped at 12 hops as a safety bound.
+pub fn walk_to_app<F>(start_pid: u32, lookup: F) -> Option<HostApp>
+where
+    F: Fn(u32) -> Option<(u32, String)>,
+{
+    let mut pid = start_pid;
+    for _ in 0..12 {
+        let (ppid, comm) = lookup(pid)?;
+        if let Some(name) = friendly_name(&comm) {
+            return Some(HostApp { name, pid });
+        }
+        if ppid <= 1 {
+            break;
+        }
+        pid = ppid;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,5 +68,27 @@ mod tests {
     fn friendly_name_non_app_is_none() {
         assert_eq!(friendly_name("/bin/zsh"), None);
         assert_eq!(friendly_name("login"), None);
+    }
+
+    #[test]
+    fn walk_reaches_iterm_through_itermserver() {
+        let lookup = |pid: u32| -> Option<(u32, String)> {
+            match pid {
+                5057 => Some((4855, "tmux".into())),
+                4855 => Some((4854, "-zsh".into())),
+                4854 => Some((88138, "login".into())),
+                88138 => Some((88124, "/Users/x/Library/Application Support/iTerm2/iTermServer-3.6.10".into())),
+                88124 => Some((1, "/Applications/iTerm.app/Contents/MacOS/iTerm2".into())),
+                _ => None,
+            }
+        };
+        assert_eq!(walk_to_app(5057, lookup), Some(HostApp { name: "iTerm2".into(), pid: 88124 }));
+    }
+    #[test]
+    fn walk_returns_none_when_no_app_ancestor() {
+        let lookup = |pid: u32| -> Option<(u32, String)> {
+            match pid { 10 => Some((1, "/usr/bin/sshd".into())), _ => None }
+        };
+        assert_eq!(walk_to_app(10, lookup), None);
     }
 }
