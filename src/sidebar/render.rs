@@ -1066,6 +1066,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_own_metrics(frame: &mut Frame, app: &App, area: Rect) {
+    use super::hostmem::fmt_mem;
     let w = area.width as usize;
     let avg = app.own_cpu_avg();
     let max_cpu = app.own_cpu_max();
@@ -1077,16 +1078,63 @@ fn render_own_metrics(frame: &mut Frame, app: &App, area: Rect) {
     let dim = Color::Rgb(55, 58, 72);
     let info_style = Style::default().bg(INFO_BG);
     let ds = |fg: Color| Style::default().fg(fg).bg(INFO_BG);
-    let data_line = Line::from(vec![
+
+    // Host-app memory thresholds (MB).
+    let rss_color = |mb: f32| {
+        if mb >= 8192.0 { Color::Rgb(255, 100, 80) }
+        else if mb >= 4096.0 { Color::Rgb(255, 210, 80) }
+        else { Color::Rgb(100, 105, 125) }
+    };
+    let swap_color = |mb: f32| {
+        if mb >= 4096.0 { Color::Rgb(255, 100, 80) }
+        else if mb >= 1024.0 { Color::Rgb(255, 210, 80) }
+        else { Color::Rgb(100, 105, 125) }
+    };
+
+    // --- Separator line: "ccmux" with the host app name right-aligned. ---
+    let title_clr = Color::Rgb(85, 90, 110);
+    let sep_line = match &app.host_app {
+        Some(host) if w > host.name.chars().count() + 8 => {
+            let name = format!(" {} ", host.name);
+            let name_w = name.chars().count();
+            let mut spans = titled_sep("ccmux", w - name_w).spans;
+            spans.push(Span::styled(name, ds(title_clr)));
+            Line::from(spans)
+        }
+        _ => titled_sep("ccmux", w),
+    };
+
+    // --- Data line: cpu/mem left, host RSS·swap right-aligned. ---
+    let left: Vec<Span> = vec![
         Span::styled("  cpu ", ds(dim)),
         Span::styled(format!("avg {:.1}%", avg), ds(val_color(avg))),
         Span::styled("  max ", ds(dim)),
         Span::styled(format!("{:.1}%", max_cpu), ds(val_color(max_cpu))),
         Span::styled("  │  ", ds(Color::Rgb(50, 53, 65))),
         Span::styled(format!("{:.0} MB", app.own_rss_mb), ds(dim)),
-    ]);
+    ];
+
+    let right: Vec<Span> = if app.host_app.is_some() {
+        vec![
+            Span::styled(fmt_mem(app.host_app_rss_mb), ds(rss_color(app.host_app_rss_mb))),
+            Span::styled(" · sw ", ds(dim)),
+            Span::styled(fmt_mem(app.system_swap_mb), ds(swap_color(app.system_swap_mb))),
+        ]
+    } else {
+        Vec::new()
+    };
+
+    let left_w: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let right_w: usize = right.iter().map(|s| s.content.chars().count()).sum();
+    let mut data_spans = left;
+    if !right.is_empty() && left_w + right_w + 2 <= w {
+        let pad = w - left_w - right_w;
+        data_spans.push(Span::styled(" ".repeat(pad), info_style));
+        data_spans.extend(right);
+    }
+
     frame.render_widget(
-        Paragraph::new(vec![titled_sep("ccmux", w), data_line]).style(info_style),
+        Paragraph::new(vec![sep_line, Line::from(data_spans)]).style(info_style),
         area,
     );
 }
