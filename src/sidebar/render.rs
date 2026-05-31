@@ -1091,33 +1091,43 @@ fn render_own_metrics(frame: &mut Frame, app: &App, area: Rect) {
         else { Color::Rgb(100, 105, 125) }
     };
 
-    // --- Separator line: "ccmux" with the host app name right-aligned. ---
+    // --- Separator line: "ccmux" + the host app name and its RSS, right-aligned. ---
+    // The sidebar is narrow (~48 cols), so we split the host metrics across the
+    // panel's two lines: app name + resident memory here, system swap on the data
+    // line. Each is labelled and fits without dropping ccmux's own metrics.
     let title_clr = Color::Rgb(85, 90, 110);
     let sep_line = match &app.host_app {
-        Some(host) if w > host.name.chars().count() + 8 => {
-            let name = format!(" {} ", host.name);
-            let name_w = name.chars().count();
-            let mut spans = titled_sep("ccmux", w - name_w).spans;
-            spans.push(Span::styled(name, ds(title_clr)));
+        // Reserve: leading space + name + space + rss + trailing space, plus room
+        // for the "ccmux" label itself (+8).
+        Some(host)
+            if w > host.name.chars().count() + fmt_mem(app.host_app_rss_mb).chars().count() + 11 =>
+        {
+            let rss_str = fmt_mem(app.host_app_rss_mb);
+            // Appended segment width must equal what we subtract from the separator.
+            let seg_w = host.name.chars().count() + rss_str.chars().count() + 3;
+            let mut spans = titled_sep("ccmux", w - seg_w).spans;
+            spans.push(Span::styled(format!(" {} ", host.name), ds(title_clr)));
+            spans.push(Span::styled(format!("{} ", rss_str), ds(rss_color(app.host_app_rss_mb))));
             Line::from(spans)
         }
         _ => titled_sep("ccmux", w),
     };
 
-    // --- Data line: cpu/mem left, host RSS·swap right-aligned. ---
+    // --- Data line: ccmux cpu/mem left, host system-swap right (behind a divider). ---
+    let divider = Color::Rgb(50, 53, 65);
     let left: Vec<Span> = vec![
         Span::styled("  cpu ", ds(dim)),
         Span::styled(format!("avg {:.1}%", avg), ds(val_color(avg))),
         Span::styled("  max ", ds(dim)),
         Span::styled(format!("{:.1}%", max_cpu), ds(val_color(max_cpu))),
-        Span::styled("  │  ", ds(Color::Rgb(50, 53, 65))),
+        Span::styled("  │  ", ds(divider)),
         Span::styled(format!("{:.0} MB", app.own_rss_mb), ds(dim)),
     ];
 
     let right: Vec<Span> = if app.host_app.is_some() {
         vec![
-            Span::styled(fmt_mem(app.host_app_rss_mb), ds(rss_color(app.host_app_rss_mb))),
-            Span::styled(" · sw ", ds(dim)),
+            Span::styled("│ ", ds(divider)),
+            Span::styled("sw ", ds(dim)),
             Span::styled(fmt_mem(app.system_swap_mb), ds(swap_color(app.system_swap_mb))),
         ]
     } else {
