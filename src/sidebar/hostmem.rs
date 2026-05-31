@@ -3,6 +3,8 @@
 //! All process-spawning lives in the `sample_*` / `detect_*` wrappers at the
 //! bottom; the logic above them is pure and unit-tested.
 
+use std::process::Command;
+
 /// The terminal application hosting this ccmux session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostApp {
@@ -89,14 +91,12 @@ pub fn parse_swap_used_mb(s: &str) -> Option<f32> {
 
 /// Format megabytes as `512M` below 1 GB, else `1.5 GB`.
 pub fn fmt_mem(mb: f32) -> String {
-    if mb < 1024.0 {
+    if mb < 1023.5 {
         format!("{:.0}M", mb)
     } else {
         format!("{:.1} GB", mb / 1024.0)
     }
 }
-
-use std::process::Command;
 
 /// Build a tmux command, optionally targeting a specific `-L` socket — mirrors
 /// `crate::tmux::Tmux::cmd` so we hit the same server ccmux manages.
@@ -132,24 +132,15 @@ pub fn detect_host_app(server: &Option<String>, session: &str) -> Option<HostApp
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
 
-    let mut first_pid: Option<u32> = None;
-    let mut match_pid: Option<u32> = None;
+    let mut client_pid: Option<u32> = None;
     for line in text.lines() {
-        let (sess, pid_str) = match line.rsplit_once(' ') {
-            Some(v) => v,
-            None => continue,
-        };
-        let Ok(pid) = pid_str.trim().parse::<u32>() else { continue };
-        if first_pid.is_none() {
-            first_pid = Some(pid);
-        }
+        let Some((sess, pid_str)) = line.rsplit_once(' ') else { continue };
         if sess == session {
-            match_pid = Some(pid);
+            client_pid = pid_str.trim().parse::<u32>().ok();
             break;
         }
     }
-    let client_pid = match_pid.or(first_pid)?;
-    walk_to_app(client_pid, ps_parent)
+    walk_to_app(client_pid?, ps_parent)
 }
 
 /// Sum RSS (MB) over the host app's process subtree via one `ps` listing.
@@ -264,5 +255,10 @@ mod tests {
     fn fmt_mem_gigabytes() {
         assert_eq!(fmt_mem(1536.0), "1.5 GB");
         assert_eq!(fmt_mem(8192.0), "8.0 GB");
+    }
+    #[test]
+    fn fmt_mem_boundary_rounds_to_gb() {
+        assert_eq!(fmt_mem(1023.5), "1.0 GB");
+        assert_eq!(fmt_mem(1023.0), "1023M");
     }
 }
