@@ -48,6 +48,28 @@ where
     None
 }
 
+/// Sum RSS (returned as MB) over the subtree rooted at `root`.
+/// `table` rows are `(pid, ppid, rss_kb)`. The root's own RSS is included.
+pub fn subtree_rss_mb(root: u32, table: &[(u32, u32, u64)]) -> f32 {
+    let mut total_kb = 0u64;
+    let mut stack = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(cur) = stack.pop() {
+        if !seen.insert(cur) {
+            continue;
+        }
+        for &(pid, ppid, rss) in table {
+            if pid == cur {
+                total_kb += rss;
+            }
+            if ppid == cur && pid != cur {
+                stack.push(pid);
+            }
+        }
+    }
+    total_kb as f32 / 1024.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +112,21 @@ mod tests {
             match pid { 10 => Some((1, "/usr/bin/sshd".into())), _ => None }
         };
         assert_eq!(walk_to_app(10, lookup), None);
+    }
+
+    #[test]
+    fn subtree_sums_descendants_excludes_daemon() {
+        let table = [
+            (100u32, 1u32, 1024u64),
+            (101, 100, 2048),
+            (102, 101, 512),
+            (200, 1, 9_999_999),
+        ];
+        assert_eq!(subtree_rss_mb(100, &table), 3.5);
+    }
+    #[test]
+    fn subtree_unknown_root_is_zero() {
+        let table = [(1u32, 0u32, 4096u64)];
+        assert_eq!(subtree_rss_mb(999, &table), 0.0);
     }
 }
