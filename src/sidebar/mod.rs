@@ -1330,6 +1330,9 @@ impl App {
                 self.host_app =
                     hostmem::detect_host_app(&self.managed_server, &self.managed_session);
             }
+            // Only sample host/swap when a host app is known — otherwise the
+            // values are never displayed, so don't spawn ps/sysctl for nothing
+            // (e.g. SSH / headless / non-macOS).
             if let Some(app) = self.host_app.clone() {
                 // A stale/dead PID yields Some(0.0); don't clobber a good reading with 0.
                 if let Some(rss) = hostmem::sample_host_rss_mb(app.pid) {
@@ -1337,9 +1340,9 @@ impl App {
                         self.host_app_rss_mb = rss;
                     }
                 }
-            }
-            if let Some(swap) = hostmem::sample_system_swap_mb() {
-                self.system_swap_mb = swap;
+                if let Some(swap) = hostmem::sample_system_swap_mb() {
+                    self.system_swap_mb = swap;
+                }
             }
             return true;
         }
