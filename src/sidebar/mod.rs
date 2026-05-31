@@ -149,6 +149,12 @@ pub struct App {
     /// Rolling window of CPU samples (≤30 entries, 5 s apart = ~2.5 min history).
     pub own_cpu_history: std::collections::VecDeque<f32>,
     last_own_metrics_tick: Instant,
+    /// Host terminal app (iTerm2, Terminal, …) — detected once, re-checked ~30 s.
+    pub host_app: Option<hostmem::HostApp>,
+    last_host_detect: Instant,
+    /// Host app resident memory (MB) and system-wide swap used (MB), polled with own metrics.
+    pub host_app_rss_mb: f32,
+    pub system_swap_mb: f32,
     /// Alternates every ~500 ms while any pane is alerted/waiting, driving the blink effect.
     pub blink_phase: bool,
     last_blink_tick: Instant,
@@ -244,6 +250,12 @@ impl App {
             own_rss_mb: 0.0,
             own_cpu_history: std::collections::VecDeque::with_capacity(30),
             last_own_metrics_tick: Instant::now(),
+            host_app: None,
+            last_host_detect: Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .unwrap_or_else(Instant::now),
+            host_app_rss_mb: 0.0,
+            system_swap_mb: 0.0,
             blink_phase: false,
             last_blink_tick: Instant::now(),
             thinking_frame: 0,
@@ -1311,6 +1323,24 @@ impl App {
             self.own_rss_mb = rss_kb as f32 / 1024.0;
             if self.own_cpu_history.len() >= 30 { self.own_cpu_history.pop_front(); }
             self.own_cpu_history.push_back(self.own_cpu_pct);
+
+            // Host terminal app: re-detect at most every ~30 s; sample each tick.
+            if self.last_host_detect.elapsed() >= Duration::from_secs(30) {
+                self.last_host_detect = Instant::now();
+                self.host_app =
+                    hostmem::detect_host_app(&self.managed_server, &self.managed_session);
+            }
+            if let Some(app) = self.host_app.clone() {
+                // A stale/dead PID yields Some(0.0); don't clobber a good reading with 0.
+                if let Some(rss) = hostmem::sample_host_rss_mb(app.pid) {
+                    if rss > 0.0 {
+                        self.host_app_rss_mb = rss;
+                    }
+                }
+            }
+            if let Some(swap) = hostmem::sample_system_swap_mb() {
+                self.system_swap_mb = swap;
+            }
             return true;
         }
         false
