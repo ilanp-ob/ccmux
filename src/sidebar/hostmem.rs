@@ -87,6 +87,15 @@ pub fn parse_swap_used_mb(s: &str) -> Option<f32> {
     Some(num.parse::<f32>().ok()? * mult)
 }
 
+/// Format megabytes as `512M` below 1 GB, else `1.5 GB`.
+pub fn fmt_mem(mb: f32) -> String {
+    if mb < 1024.0 {
+        format!("{:.0}M", mb)
+    } else {
+        format!("{:.1} GB", mb / 1024.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +174,16 @@ mod tests {
     #[test]
     fn parse_swap_garbage_is_none() {
         assert_eq!(parse_swap_used_mb("nonsense"), None);
+    }
+
+    #[test]
+    fn fmt_mem_megabytes() {
+        assert_eq!(fmt_mem(512.0), "512M");
+        assert_eq!(fmt_mem(0.0), "0M");
+    }
+    #[test]
+    fn fmt_mem_gigabytes() {
+        assert_eq!(fmt_mem(1536.0), "1.5 GB");
+        assert_eq!(fmt_mem(8192.0), "8.0 GB");
     }
 }
