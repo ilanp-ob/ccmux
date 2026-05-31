@@ -96,6 +96,85 @@ pub fn fmt_mem(mb: f32) -> String {
     }
 }
 
+use std::process::Command;
+
+/// Build a tmux command, optionally targeting a specific `-L` socket — mirrors
+/// `crate::tmux::Tmux::cmd` so we hit the same server ccmux manages.
+fn tmux_cmd(server: &Option<String>) -> Command {
+    let mut cmd = Command::new("tmux");
+    if let Some(s) = server {
+        cmd.args(["-L", s]);
+    }
+    cmd
+}
+
+/// Look up `(ppid, comm)` for a single PID via `ps`. `comm` is the executable
+/// path, which may contain spaces, so we split off only the first whitespace
+/// token (ppid) and treat the remainder as the path.
+fn ps_parent(pid: u32) -> Option<(u32, String)> {
+    let out = Command::new("ps")
+        .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let line = String::from_utf8_lossy(&out.stdout);
+    let line = line.trim();
+    let (ppid_str, comm) = line.split_once(char::is_whitespace)?;
+    let ppid: u32 = ppid_str.trim().parse().ok()?;
+    Some((ppid, comm.trim().to_string()))
+}
+
+/// Detect the host terminal app for ccmux's session by walking up from the tmux
+/// client PID to the owning `.app`. Returns `None` on non-macOS / SSH / headless.
+pub fn detect_host_app(server: &Option<String>, session: &str) -> Option<HostApp> {
+    let out = tmux_cmd(server)
+        .args(["list-clients", "-F", "#{session_name} #{client_pid}"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    let mut first_pid: Option<u32> = None;
+    let mut match_pid: Option<u32> = None;
+    for line in text.lines() {
+        let (sess, pid_str) = match line.rsplit_once(' ') {
+            Some(v) => v,
+            None => continue,
+        };
+        let Ok(pid) = pid_str.trim().parse::<u32>() else { continue };
+        if first_pid.is_none() {
+            first_pid = Some(pid);
+        }
+        if sess == session {
+            match_pid = Some(pid);
+            break;
+        }
+    }
+    let client_pid = match_pid.or(first_pid)?;
+    walk_to_app(client_pid, ps_parent)
+}
+
+/// Sum RSS (MB) over the host app's process subtree via one `ps` listing.
+pub fn sample_host_rss_mb(pid: u32) -> Option<f32> {
+    let out = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,rss="])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut table: Vec<(u32, u32, u64)> = Vec::new();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        let (Some(p), Some(pp), Some(rss)) = (it.next(), it.next(), it.next()) else { continue };
+        let (Ok(p), Ok(pp), Ok(rss)) = (p.parse(), pp.parse(), rss.parse()) else { continue };
+        table.push((p, pp, rss));
+    }
+    Some(subtree_rss_mb(pid, &table))
+}
+
+/// System-wide swap used (MB) via `sysctl -n vm.swapusage`.
+pub fn sample_system_swap_mb() -> Option<f32> {
+    let out = Command::new("sysctl").args(["-n", "vm.swapusage"]).output().ok()?;
+    parse_swap_used_mb(&String::from_utf8_lossy(&out.stdout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
