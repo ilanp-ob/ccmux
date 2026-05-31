@@ -70,6 +70,23 @@ pub fn subtree_rss_mb(root: u32, table: &[(u32, u32, u64)]) -> f32 {
     total_kb as f32 / 1024.0
 }
 
+/// Parse the `used = <n><suffix>` field from `sysctl -n vm.swapusage` output,
+/// returning megabytes. Handles `K`/`M`/`G` suffixes.
+pub fn parse_swap_used_mb(s: &str) -> Option<f32> {
+    let after = s.split("used =").nth(1)?.trim_start();
+    let token: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
+    let (num, mult) = if let Some(n) = token.strip_suffix('G') {
+        (n, 1024.0)
+    } else if let Some(n) = token.strip_suffix('M') {
+        (n, 1.0)
+    } else if let Some(n) = token.strip_suffix('K') {
+        (n, 1.0 / 1024.0)
+    } else {
+        (token.as_str(), 1.0)
+    };
+    Some(num.parse::<f32>().ok()? * mult)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +145,25 @@ mod tests {
     fn subtree_unknown_root_is_zero() {
         let table = [(1u32, 0u32, 4096u64)];
         assert_eq!(subtree_rss_mb(999, &table), 0.0);
+    }
+
+    #[test]
+    fn parse_swap_megabytes() {
+        let s = "total = 2048.00M  used = 512.25M  free = 1535.75M  (encrypted)";
+        assert_eq!(parse_swap_used_mb(s), Some(512.25));
+    }
+    #[test]
+    fn parse_swap_gigabytes() {
+        let s = "total = 8192.00M  used = 1.50G  free = 6.50G  (encrypted)";
+        assert_eq!(parse_swap_used_mb(s), Some(1536.0));
+    }
+    #[test]
+    fn parse_swap_zero() {
+        let s = "total = 0.00M  used = 0.00M  free = 0.00M";
+        assert_eq!(parse_swap_used_mb(s), Some(0.0));
+    }
+    #[test]
+    fn parse_swap_garbage_is_none() {
+        assert_eq!(parse_swap_used_mb("nonsense"), None);
     }
 }
