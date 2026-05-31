@@ -80,7 +80,7 @@ pub struct WorktreeOpts {
 impl Default for WorktreeOpts {
     fn default() -> Self {
         Self {
-            model_idx: 2,      // claude-sonnet-4-6
+            model_idx: 3,      // claude-sonnet-4-6
             effort_idx: 2,     // high
             launch_claude: true,
             color_idx: 0,

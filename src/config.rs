@@ -174,6 +174,7 @@ pub const WINDOW_COLORS: &[(&str, &str, &str)] = &[
 ];
 
 pub const AVAILABLE_MODELS: &[&str] = &[
+    "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
