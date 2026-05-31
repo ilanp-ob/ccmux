@@ -1,6 +1,7 @@
 pub mod input;
 pub mod mode;
 pub mod render;
+pub mod hostmem;
 
 pub use mode::Mode;
 
