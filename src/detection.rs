@@ -102,6 +102,11 @@ fn is_waiting_for_input(content: &str) -> bool {
                 if t.starts_with("* recap:") || t.contains("disable recaps") { continue; }
                 // Skip plain numbered option lines: "1. Show me draft comment"
                 if is_numbered_option_line(t) { continue; }
+                // A line beginning with '>' is the user's OWN message echoed in the
+                // transcript (e.g. "> well?"), not Claude asking a question. Don't
+                // notify when the user is the one who asked. (Numbered-selection
+                // cursors like "> 1." are handled earlier and never reach here.)
+                if t.starts_with('>') { return false; }
                 return t.ends_with('?');
             }
             break;
@@ -369,6 +374,16 @@ mod tests {
         // Scrollback contains an old question, but the current prompt has a statement above it.
         let content = "Old question?\n─────\n❯ \nI updated the file.\n─────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn no_false_positive_user_authored_question() {
+        // A line starting with '>' is the user's OWN message echoed above the prompt
+        // (e.g. "> well?"). It must not be mistaken for Claude asking a question, so
+        // it should not trigger a WaitingInput notification.
+        let content = "> well?\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::Idle);
     }
 
     #[test]
