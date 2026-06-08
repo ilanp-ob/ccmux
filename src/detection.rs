@@ -102,11 +102,16 @@ fn is_waiting_for_input(content: &str) -> bool {
                 if t.starts_with("* recap:") || t.contains("disable recaps") { continue; }
                 // Skip plain numbered option lines: "1. Show me draft comment"
                 if is_numbered_option_line(t) { continue; }
-                // A line beginning with '>' is the user's OWN message echoed in the
-                // transcript (e.g. "> well?"), not Claude asking a question. Don't
-                // notify when the user is the one who asked. (Numbered-selection
-                // cursors like "> 1." are handled earlier and never reach here.)
-                if t.starts_with('>') { return false; }
+                // A line beginning with the user's own input marker is the user's
+                // message, not Claude asking a question — don't notify when the user
+                // is the one who asked. Two markers exist:
+                //   • '>'  (U+003E) — a sent message echoed in the transcript ("> well?")
+                //   • '❯'  (U+276F) — a queued message shown while Claude is busy
+                //     ("❯ did you use superpowers too?" above "Press up to edit
+                //     queued messages"), or the idle input prompt itself.
+                // (Numbered-selection cursors like "> 1." / "❯ 1." are handled
+                // earlier and never reach here.)
+                if t.starts_with('>') || t.starts_with('\u{276F}') { return false; }
                 return t.ends_with('?');
             }
             break;
@@ -384,6 +389,17 @@ mod tests {
         let content = "> well?\n─────\n❯ ";
         assert_eq!(detect_status(content), ClaudeCodeStatus::Idle);
         assert_eq!(detect_static_status(content), ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn no_false_positive_queued_message_question() {
+        // While Claude works, queued messages render with a '❯' (U+276F) prefix in a
+        // box above "Press up to edit queued messages". A queued question ending in
+        // '?' must NOT be read as Claude asking the user (real capture from a busy
+        // session). Claude is "Garnishing…", so the status is Thinking, never Waiting.
+        let content = "✳ Garnishing… (19m 50s · ↓ 44.8k tokens)\n\n  ❯ did you use superpowers too?\n──────── epic-15945-plan ──\n❯ Press up to edit queued messages\n────────\n  📁 ~/dev/houston-master1\n";
+        assert_ne!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_ne!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
     }
 
     #[test]
