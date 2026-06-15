@@ -1,142 +1,250 @@
 # ccmux
 
-A terminal user interface for managing multiple Claude Code sessions within tmux. ccmux is a fork of [claude-tmux](https://github.com/nielsgroen/claude-tmux) by Niels Groeneveld, providing a centralized view of all your Claude Code instances, enabling quick switching, status monitoring, and session lifecycle management, including git worktree and pull request support.
+A tmux **sidebar** for managing many Claude Code sessions at once.
 
-## Installation
+ccmux lives in a thin pane down the side of your tmux window. It shows every
+window running Claude Code (or `ocli` / `ops-cli`), tells you which ones are
+working, idle, or waiting for your input, and lets you jump between them, spin
+up git worktrees, answer prompts, and manage windows — all without leaving the
+keyboard.
 
-### Cargo install
+ccmux is a heavily extended fork of
+[claude-tmux](https://github.com/nielsgroen/claude-tmux) by Niels Groeneveld.
 
-Just run:
-
-```bash
-cargo install ccmux
+```
+┌ ccmux [S] ──────────────┐
+│ win 0 ilan.peretz       │
+│   ○ ilan.peretz      %1 │   ●  working   — actively processing
+│   feat/explain-…        │   ✻  thinking  — extended reasoning
+│ win 2 houston-prsplit   │   ◐  waiting   — needs your input
+│   ○ houston-prsplit  %2 │   ○  idle      — ready for input
+│   pr/2-opslocal-…       │   ⚠  alert     — fired a notification
+│ ▶ win 6 ccmux           │
+│   ○ ccmux            %4 │   Footer: Claude usage · MemPalace
+│   main                  │           stats · ccmux CPU/RSS
+└─────────────────────────┘
 ```
 
-Add the following line to your `~/.tmux.conf`:
+## Screenshots
 
-```bash
-bind-key C-c display-popup -E -w 80 -h 30 "~/.cargo/bin/ccmux"
-```
+<img src="docs/images/sidebar.png" alt="ccmux sidebar alongside a Claude Code session" width="900">
+
+<p>
+<img src="docs/images/worktree-picker.png" alt="Worktree branch picker" width="280">
+&nbsp;&nbsp;
+<img src="docs/images/help.png" alt="Help overlay" width="320">
+</p>
+
+## How it works
+
+ccmux scans your tmux panes for ones running `claude` (and `ocli` / `ops-cli`),
+groups them by window, and renders one entry per window in the sidebar. For the
+selected window it shows a short **live preview** of the pane, the **git
+branch**, and a **status icon** derived from the pane's on-screen content.
+
+It does not poll an API or wrap Claude Code — it reads tmux panes directly, so
+it works with whatever you already have running.
+
+## Install
 
 ### Build from source
 
 ```bash
 git clone https://github.com/ilanp-ob/ccmux.git
 cd ccmux
-cargo build --release
+cargo install --path .          # installs `ccmux` to ~/.cargo/bin
 ```
 
-Add this to your `~/.tmux.conf` to bind ccmux to a key:
+### Wire it into tmux
+
+The quickest setup is the bundled TPM plugin. Add to `~/.tmux.conf`:
+
+```tmux
+set -g @plugin 'ilanp-ob/ccmux'
+set -g @ccmux-toggle-key C-c     # prefix + C-c toggles the sidebar
+```
+
+Press `prefix + I` to install the plugin, then run the one-time setup to install
+the auto-open hooks and `prefix + Ctrl+1..9` session-jump bindings:
 
 ```bash
-bind-key C-c display-popup -E -w 80 -h 30 "/path/to/ccmux"
+ccmux setup
 ```
 
-### How to use
+That's it. `prefix + C-c` now toggles the sidebar in the current window.
 
-Reload your tmux configuration.
-Press `Ctrl-b, Ctrl-c` to open ccmux from any tmux session.
-
-To use pull requests, make sure you have `gh` installed.
-
-### Tmux options
-
-Options:
-- `-E` — Close popup when ccmux exits
-- `-w 80 -h 30` — Popup dimensions (adjust to preference)
-
-## Features
-
-- **Session Overview** — See all tmux sessions at a glance with Claude Code status indicators
-- **Status Detection** — Know whether each Claude Code instance is idle, working, or waiting for input
-- **Quick Switching** — Jump to any session with minimal keystrokes
-- **Live Preview** — See the last lines of the selected session's Claude Code pane with full ANSI color support
-- **Session Management** — Create, kill, and rename sessions without leaving the TUI
-- **Expandable Details** — View metadata like window count, pane commands, uptime, and attachment status
-- **Fuzzy Filtering** — Quickly filter sessions by name or path
-
-## Screenshots
-
-View the screenshots at [GitHub](https://github.com/ilanp-ob/ccmux).
-
-<img src="docs/images/screenshot.png" alt="ccmux Screenshot" width="400">
-
-<img src="docs/images/screenshot2.png" alt="ccmux Screenshot 2" width="400">
-
-**Status indicators:**
-- `●` — Working: Claude is actively processing
-- `○` — Idle: Ready for input
-- `◐` — Waiting for input: Permission prompt (`[y/n]`)
-- `?` — Unknown: Not a Claude Code session or status unclear
+See [`docs/tmux-setup.md`](docs/tmux-setup.md) for the optional status-bar
+integration that renders the status icon next to each window name.
 
 ## Keybindings
+
+These mirror the in-app help — press `?` inside the sidebar to see them.
 
 ### Navigation
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | Move selection down |
-| `k` / `↑` | Move selection up |
-| `l` / `→` | Expand session details |
-| `h` / `←` | Collapse session details |
-| `Enter` | Switch to selected session |
+| `j` / `↓` | Select next session |
+| `k` / `↑` | Select previous session |
+| `1`–`9` | Jump to session by number (press again to focus its pane) |
+| `Enter` | Preview window (press again to focus the Claude pane) |
 
 ### Actions
 
 | Key | Action |
 |-----|--------|
-| `n` | Create new session |
-| `K` | Kill selected session (with confirmation) |
-| `r` | Rename selected session |
-| `/` | Filter sessions by name/path |
-| `Ctrl+c` | Clear filter |
-| `R` | Refresh session list |
+| `i` | Send a message to the selected Claude session (or reply to a job) |
+| `l` | Action menu — answer a prompt, PR ops, delete worktree |
+| `c` | New session — pick a folder and launch Claude |
+| `w` | New worktree — fetch → pick branch → name folder → launch options |
+| `o` | New worktree on a fixed repo (`worktree.houston_path`, default `~/dev/houston`) |
+| `e` | Edit the current window — name and color |
+| `K` | Kill the current window (with confirmation) |
 
-### Other
+### Sidebar
 
 | Key | Action |
 |-----|--------|
-| `?` | Show help |
-| `q` / `Esc` | Quit |
+| `s` | Toggle **sticky** — auto-open the sidebar when you switch to a Claude window |
+| `q` / `Esc` | Close the sidebar |
+| `?` | Show / hide the help overlay |
 
-## Status Detection
+The title bar shows `ccmux [S]` when sticky mode is on.
 
-ccmux detects Claude Code status by analyzing pane content:
+## Status detection
 
-| Pattern | Status |
-|---------|--------|
-| Input prompt (`❯`) with border above + "ctrl+c to interrupt" | Working |
-| Input prompt (`❯`) with border above, no interrupt message | Idle |
-| Contains `[y/n]` or `[Y/n]` | Waiting for input |
-| Otherwise | Unknown |
+ccmux classifies each session by reading its pane content. No status is reported
+by Claude itself — it's all inferred from what's on screen.
 
-## Session Model
+| Icon | Status | Detected from |
+|------|--------|---------------|
+| `●` | **Working** | input field + `ctrl+c to interrupt` hint |
+| `✻` | **Thinking** | spinner ornament + `Thinking…` / extended-thinking |
+| `◐` | **Waiting** | `[y/n]` prompts, tool-approval footers, numbered choices, or a trailing conversational question |
+| `○` | **Idle** | input field present, no interrupt hint |
+| `?` | **Unknown** | none of the above |
 
-ccmux identifies sessions containing Claude Code by looking for panes running the `claude` command. The displayed working directory and preview come from the Claude Code pane when present, otherwise from the first pane.
+When the answer is ambiguous, ccmux uses whether the pane content *changed*
+since the last check to decide between "still working" and "settled".
 
-Sessions are sorted with attached sessions first, then alphabetically by name.
+## Features
+
+- **Live session overview** — every Claude window in one pane, with branch,
+  path, status icon, and a short preview of the selected one. Extra (non-Claude)
+  panes in a window are listed underneath.
+- **Worktree workflow** — `w` runs a guided flow: fetch origin → pick a branch
+  (local + remote, sorted by recency, with existing worktrees annotated) → edit
+  the folder name → choose model, effort, color, and whether to launch Claude /
+  open VSCode. Built on `git2` and `git worktree`.
+- **Smart action menu** — `l` parses the pane for the current question (y/n,
+  numbered lists, inline "choose A, B, or C", agent action items) and lets you
+  answer with one keystroke. Also offers PR create/view/merge/close via `gh` and
+  worktree deletion.
+- **Background job tracking** — surfaces daemon agents (e.g. `/schedule` runs)
+  from `~/.claude/jobs/`, shows their status, and lets you reply to or resume
+  them.
+- **Notifications** — a background worker fires a macOS notification (and tmux
+  bell) when a session transitions from working/thinking to idle or
+  waiting-for-input, and flags the window with `⚠`.
+- **Window management** — rename and recolor windows (`e`), create (`c`) or kill
+  (`K`) them. Colors persist in a tmux variable and can drive the status bar.
+- **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace
+  stats read from the statusline cache, plus ccmux's own CPU/RSS and the host
+  terminal app's memory.
+- **Multi-server** — manage additional named tmux servers via `servers.extra`.
+
+## Configuration
+
+ccmux reads `~/.config/ccmux/config.toml`, creating it with defaults on first
+run. The defaults:
+
+```toml
+[sidebar]
+width = 50            # sidebar pane width in columns
+position = "left"
+refresh_ms = 5000     # how often to reload the pane list
+status_ms = 5000      # how often to refresh status icons
+sticky = true         # auto-open on switching to a Claude window
+
+[claude]
+alias = "claude"
+default_model = "claude-sonnet-4-6"
+default_effort = "high"
+
+[detection]
+commands = ["claude", "ocli", "ops-cli"]   # pane commands treated as sessions
+
+[notifications]
+enabled = true
+macos = true
+tmux_bell = true
+repeat_secs = 0
+
+[worktree]
+base_dir = "~/dev"             # where new worktrees are created
+houston_path = "~/dev/houston"
+defaults = { base_branch = "origin/master" }
+
+[servers]
+extra = []                     # additional `tmux -L <name>` servers to manage
+```
+
+Available models: `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`,
+`claude-sonnet-4-6`, `claude-haiku-4-5`. Efforts: `low`, `medium`, `high`,
+`max`, `auto`.
+
+## CLI
+
+ccmux is one binary with subcommands; most are invoked by tmux for you.
+
+| Command | Purpose |
+|---------|---------|
+| `ccmux toggle` | Open/close the sidebar in the current window (bound to your toggle key) |
+| `ccmux setup` | Install auto-open hooks and `prefix + Ctrl+1..9` jump bindings |
+| `ccmux close` | Close every ccmux sidebar on this tmux server |
+| `ccmux status --window <id>` | Print the status icon for the tmux status bar |
+| `ccmux focus <N>` | Jump to session #N (auto-opens the sidebar) |
+| `ccmux sidebar` | Run the sidebar TUI (called internally by `toggle`) |
+| `ccmux notify-worker` | Background status-change notification daemon (spawned internally) |
+| `ccmux auto-open --window <id>` | Auto-open hook target (called by tmux) |
+| `ccmux pty-attach <session>` | Attach to a running daemon agent via its PTY socket |
+
+Add `--server <name>` to target a non-default tmux server.
+
+## Architecture
+
+```
+src/
+├── main.rs          # CLI (clap), command dispatch, sidebar pane lifecycle, tmux hook install
+├── config.rs        # config.toml load/save; color/model/effort tables
+├── detection.rs     # status detection from pane content (well-tested)
+├── git.rs           # git worktree management via git2 + `git worktree`
+├── jobs.rs          # background daemon-agent tracking from ~/.claude/jobs/
+├── notify.rs        # notification worker (macOS / terminal-notifier / osascript)
+├── session.rs       # status, pane, and window-group data structures
+├── sidebar/
+│   ├── mod.rs       # app state machine, refresh ticks, global info
+│   ├── input.rs     # keyboard/mouse handling, readline editing, choice parsing
+│   ├── mode.rs      # UI modes and multi-step flow definitions
+│   ├── render.rs    # ratatui rendering (list, overlays, footer, help)
+│   └── hostmem.rs   # ccmux + host terminal memory/CPU sampling
+└── tmux/
+    ├── mod.rs       # tmux command wrappers
+    ├── detect.rs    # pane → window-group detection
+    ├── state.rs     # pane state structures
+    └── windows.rs   # window listing helpers
+```
 
 ## Dependencies
 
-- [ratatui](https://ratatui.rs/) — Terminal UI framework
-- [crossterm](https://github.com/crossterm-rs/crossterm) — Terminal manipulation
-- [ansi-to-tui](https://github.com/uttarayan21/ansi-to-tui) — ANSI escape sequence rendering
-- [anyhow](https://github.com/dtolnay/anyhow) — Error handling
-- [dirs](https://github.com/dirs-dev/dirs-rs) — Home directory resolution
-- [unicode-width](https://github.com/unicode-rs/unicode-width) — Text alignment
+[ratatui](https://ratatui.rs/) · [crossterm](https://github.com/crossterm-rs/crossterm)
+· [git2](https://github.com/rust-lang/git2-rs)
+· [clap](https://github.com/clap-rs/clap)
+· [serde](https://serde.rs/) / serde_json / [toml](https://github.com/toml-rs/toml)
+· [anyhow](https://github.com/dtolnay/anyhow) · [dirs](https://github.com/dirs-dev/dirs-rs)
+· [unicode-width](https://github.com/unicode-rs/unicode-width)
 
-## Project Structure
+## License
 
-```
-ccmux/
-├── Cargo.toml
-├── src/
-│   ├── main.rs        # Entry point, terminal setup
-│   ├── app.rs         # Application state machine
-│   ├── ui.rs          # Ratatui rendering
-│   ├── tmux.rs        # tmux command wrapper
-│   ├── session.rs     # Session/Pane data structures
-│   ├── detection.rs   # Claude Code status detection
-│   └── input.rs       # Keyboard event handling
-└── README.md
-```
+AGPL-3.0-only. Based on [claude-tmux](https://github.com/nielsgroen/claude-tmux)
+by Niels Groeneveld.

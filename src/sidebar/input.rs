@@ -210,10 +210,15 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.start_worktree_flow();
         }
         KeyCode::Char('o') => {
-            let houston = std::path::PathBuf::from(
-                std::env::var("HOME").unwrap_or_default()
-            ).join("dev").join("houston");
-            app.start_worktree_flow_for_path(houston);
+            let raw = &app.config.worktree.houston_path;
+            let path = if let Some(rest) = raw.strip_prefix("~/") {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest)
+            } else if raw == "~" {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            } else {
+                std::path::PathBuf::from(raw)
+            };
+            app.start_worktree_flow_for_path(path);
         }
         KeyCode::Char('l') => {
             let items = app.action_items_for_selected();
