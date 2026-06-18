@@ -117,6 +117,40 @@ pub fn relative_time(then: std::time::SystemTime, now: std::time::SystemTime) ->
     else { format!("{}d ago", secs / 86400) }
 }
 
+/// Filter `entries` down to those belonging to the repo identified by `target_common_dir`,
+/// then sort current-worktree-first, newest-first within groups.
+pub fn group_by_repo(
+    entries: Vec<SessionEntry>,
+    resolve_common_dir: impl Fn(&str) -> Option<std::path::PathBuf>,
+    target_common_dir: &std::path::Path,
+    repo_root: &std::path::Path,
+    current_cwd: &str,
+) -> Vec<SessionEntry> {
+    let repo_root_str = repo_root.to_string_lossy().to_string();
+    let under = format!("{}/", repo_root_str);
+    let sibling = format!("{}-", repo_root_str);
+
+    let mut kept: Vec<SessionEntry> = entries.into_iter().filter(|e| {
+        match resolve_common_dir(&e.cwd) {
+            Some(cd) => cd == target_common_dir,
+            None => {
+                // Dead worktree — match by ccmux's path convention.
+                e.cwd == repo_root_str
+                    || e.cwd.starts_with(&under)
+                    || e.cwd.starts_with(&sibling)
+            }
+        }
+    }).collect();
+
+    kept.sort_by(|a, b| {
+        let a_cur = a.cwd == current_cwd;
+        let b_cur = b.cwd == current_cwd;
+        // current worktree first (true sorts before false), then newest first
+        b_cur.cmp(&a_cur).then(b.last_activity.cmp(&a.last_activity))
+    });
+    kept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +161,15 @@ mod tests {
 {"type":"user","message":{"role":"user","content":"hello there"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}
 {"type":"user","message":{"role":"user","content":"again"}}"#;
+
+    fn mk(id: &str, cwd: &str, secs: u64) -> SessionEntry {
+        SessionEntry {
+            id: id.into(), title: id.into(), cwd: cwd.into(), branch: None,
+            worktree_label: "w".into(),
+            last_activity: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            msg_count: 1, file_path: PathBuf::from(format!("/p/{}.jsonl", id)), worktree_alive: true,
+        }
+    }
 
     #[test]
     fn parses_title_cwd_branch_and_msg_count() {
@@ -168,5 +211,29 @@ mod tests {
         assert_eq!(relative_time(now - Duration::from_secs(120), now), "2m ago");
         assert_eq!(relative_time(now - Duration::from_secs(7200), now), "2h ago");
         assert_eq!(relative_time(now - Duration::from_secs(3 * 86400), now), "3d ago");
+    }
+
+    #[test]
+    fn groups_includes_repo_and_orders_current_first() {
+        let target = PathBuf::from("/repo/.git");
+        let repo_root = PathBuf::from("/dev/proj");
+        let entries = vec![
+            mk("a", "/dev/proj", 100),           // resolves to target
+            mk("b", "/dev/proj-feature", 300),   // resolves to target (live worktree)
+            mk("c", "/dev/other", 200),          // resolves elsewhere — excluded
+            mk("d", "/dev/proj-dead", 400),      // resolver None, path-convention match — included
+            mk("e", "/dev/unrelated-dead", 500), // resolver None, no path match — excluded
+        ];
+        let resolver = |cwd: &str| -> Option<PathBuf> {
+            match cwd {
+                "/dev/proj" | "/dev/proj-feature" => Some(PathBuf::from("/repo/.git")),
+                "/dev/other" => Some(PathBuf::from("/repo2/.git")),
+                _ => None, // dead worktrees don't resolve
+            }
+        };
+        let out = group_by_repo(entries, resolver, &target, &repo_root, "/dev/proj");
+        let ids: Vec<&str> = out.iter().map(|e| e.id.as_str()).collect();
+        // current worktree ("/dev/proj" → a) first; then others by recency desc: d(400), b(300)
+        assert_eq!(ids, vec!["a", "d", "b"]);
     }
 }
