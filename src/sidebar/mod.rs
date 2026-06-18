@@ -1703,6 +1703,33 @@ impl App {
             .status();
     }
 
+    /// Open a popup showing the selected branch's PR overview + CI checks (read-only).
+    /// On-demand only — runs `gh` when invoked; no background API traffic.
+    pub fn open_pr_popup(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let Some(repo) = crate::git::find_repo_root(&pane.current_path) else {
+            self.set_message("Not a git repository");
+            return;
+        };
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let dir = shell_quote(&repo.to_string_lossy());
+        // gh lives in /opt/homebrew/bin, which the tmux-server environment behind
+        // display-popup often lacks — prepend it (same reason as open_git_popup).
+        // GH_FORCE_TTY keeps gh's colored, formatted output even when piped to the pager.
+        // gh prints its own "no pull requests found" / auth errors, which stay visible.
+        let inner = format!(
+            "cd {} && export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\" && \
+             if command -v gh >/dev/null 2>&1; then \
+             {{ GH_FORCE_TTY=100% gh pr view; echo; GH_FORCE_TTY=100% gh pr checks; }} 2>&1 | {}; \
+             else echo 'gh not installed' | {}; fi",
+            dir, pager, pager
+        );
+        let tmux = Tmux::new(self.managed_server.clone());
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &inner])
+            .status();
+    }
+
     /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
     /// exists; otherwise falls back to the repo main root and notes it.
     pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {

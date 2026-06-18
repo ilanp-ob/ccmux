@@ -100,6 +100,7 @@ These mirror the in-app help — press `?` inside the sidebar to see them.
 | `o` | New worktree on a fixed repo (`worktree.houston_path`, default `~/dev/houston`) |
 | `h` | Browse Claude history for this repo (preview / resume past sessions) |
 | `g` | Git status popup — full `git status` + `diff` for the selected repo |
+| `p` | PR status popup — `gh pr view` + checks for the selected branch |
 | `e` | Edit the current window — name and color |
 | `K` | Kill the current window (with confirmation) |
 
@@ -156,6 +157,10 @@ since the last check to decide between "still working" and "settled".
   (branch · ↑↓ ahead/behind · ● staged · + unstaged · ? untracked) and a
   bounded list of changed files. `g` opens the full `git status` + `diff` in a
   popup. Computed in the background and throttled, so it never blocks the UI.
+- **PR status** — `p` opens a popup with the selected branch's pull-request
+  overview (`gh pr view`) and CI checks (`gh pr checks`): state, reviewers,
+  mergeable, pass/fail. On-demand only — gh runs when you press the key, so
+  there's no background API traffic.
 - **Window management** — rename and recolor windows (`e`), create (`c`) or kill
   (`K`) them. Colors persist in a tmux variable and can drive the status bar.
 - **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace
