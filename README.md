@@ -99,6 +99,7 @@ These mirror the in-app help — press `?` inside the sidebar to see them.
 | `w` | New worktree — fetch → pick branch → name folder → launch options |
 | `o` | New worktree on a fixed repo (`worktree.houston_path`, default `~/dev/houston`) |
 | `h` | Browse Claude history for this repo (preview / resume past sessions) |
+| `g` | Git status popup — full `git status` + `diff` for the selected repo |
 | `e` | Edit the current window — name and color |
 | `K` | Kill the current window (with confirmation) |
 
@@ -151,6 +152,10 @@ since the last check to decide between "still working" and "settled".
   repo (current worktree first, then all worktrees), with type-to-filter. `Enter`
   opens a formatted transcript in a popup; `Ctrl+r` resumes the session in a new
   window (falling back to the repo root if the original worktree is gone).
+- **Git status** — the selected window's repo shows a live summary line
+  (branch · ↑↓ ahead/behind · ● staged · + unstaged · ? untracked) and a
+  bounded list of changed files. `g` opens the full `git status` + `diff` in a
+  popup. Computed in the background and throttled, so it never blocks the UI.
 - **Window management** — rename and recolor windows (`e`), create (`c`) or kill
   (`K`) them. Colors persist in a tmux variable and can drive the status bar.
 - **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace

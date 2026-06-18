@@ -1,6 +1,7 @@
 mod config;
 mod detection;
 mod git;
+mod gitstatus;
 mod history;
 mod jobs;
 mod notify;
@@ -339,6 +340,10 @@ fn run_sidebar_loop(
         }
 
         if app.tick_history() {
+            needs_redraw = true;
+        }
+
+        if app.tick_gitstatus() {
             needs_redraw = true;
         }
 

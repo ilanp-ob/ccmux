@@ -136,6 +136,15 @@ pub struct App {
     /// Background history-scan thread for the history browser.
     pub history_handle: Option<std::thread::JoinHandle<Vec<crate::history::SessionEntry>>>,
     pub history_repo_root: Option<String>,
+    /// Background `git status` thread for the selected repo.
+    pub git_handle: Option<std::thread::JoinHandle<Option<crate::gitstatus::GitStatus>>>,
+    /// Repo path the in-flight git_handle is computing.
+    pub git_handle_path: Option<std::path::PathBuf>,
+    /// Latest git status for the selected repo (None = unknown / not a repo).
+    pub gitstatus: Option<crate::gitstatus::GitStatus>,
+    /// Repo path that `gitstatus` belongs to.
+    pub gitstatus_path: Option<std::path::PathBuf>,
+    last_gitstatus_tick: std::time::Instant,
     last_nav_hint_tick: Instant,
     pub global_info: GlobalInfo,
     last_global_info_tick: Instant,
@@ -244,6 +253,13 @@ impl App {
             folder_scan_root: None,
             history_handle: None,
             history_repo_root: None,
+            git_handle: None,
+            git_handle_path: None,
+            gitstatus: None,
+            gitstatus_path: None,
+            last_gitstatus_tick: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
             last_nav_hint_tick: Instant::now(),
             global_info: GlobalInfo::load(),
             last_global_info_tick: Instant::now(),
@@ -1017,6 +1033,56 @@ impl App {
         true
     }
 
+    /// Recompute git status for the selected repo when the selection changes or the
+    /// throttle elapses. Reaps the background thread. Returns true if the display changed.
+    pub fn tick_gitstatus(&mut self) -> bool {
+        // Reap a finished computation.
+        if self.git_handle.as_ref().map(|h| h.is_finished()).unwrap_or(false) {
+            let res = self.git_handle.take().unwrap().join().unwrap_or(None);
+            self.gitstatus = res;
+            self.gitstatus_path = self.git_handle_path.take();
+            return true;
+        }
+
+        // Resolve the selected pane's repo root.
+        let repo = self.selected_pane()
+            .map(|p| p.current_path.clone())
+            .and_then(|p| crate::git::find_repo_root(&p));
+
+        let repo = match repo {
+            None => {
+                // Not a git repo — drop any stale status.
+                let changed = self.gitstatus.is_some() || self.gitstatus_path.is_some();
+                self.gitstatus = None;
+                self.gitstatus_path = None;
+                return changed;
+            }
+            Some(r) => r,
+        };
+
+        let selection_changed = self.gitstatus_path.as_deref() != Some(repo.as_path());
+        let throttle_elapsed = self.last_gitstatus_tick.elapsed() >= Duration::from_secs(3);
+        let inflight = self.git_handle.is_some();
+
+        let mut changed = false;
+        if selection_changed && self.git_handle_path.as_deref() != Some(repo.as_path()) {
+            // Selection moved to a different repo — clear stale status so the
+            // renderer shows a placeholder until the new result lands.
+            if self.gitstatus.is_some() { changed = true; }
+            self.gitstatus = None;
+            self.gitstatus_path = None;
+        }
+
+        if (selection_changed || throttle_elapsed) && !inflight {
+            self.last_gitstatus_tick = Instant::now();
+            self.git_handle_path = Some(repo.clone());
+            self.git_handle = Some(std::thread::spawn(move || {
+                crate::gitstatus::run_status(&repo)
+            }));
+        }
+        changed
+    }
+
     pub fn navigate_folder_into(&mut self, path: std::path::PathBuf) {
         use crate::sidebar::mode::FolderPickStep;
         self.folder_scan_root = Some(path.clone());
@@ -1605,6 +1671,29 @@ impl App {
         let cmd = format!("{} {}", pager, shell_quote(&tmp.to_string_lossy()));
         let _ = tmux.cmd()
             .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &cmd])
+            .status();
+    }
+
+    /// Open a popup with full `git status` + `git diff` for the selected repo (read-only).
+    pub fn open_git_popup(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let Some(repo) = crate::git::find_repo_root(&pane.current_path) else {
+            self.set_message("Not a git repository");
+            return;
+        };
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let dir = shell_quote(&repo.to_string_lossy());
+        // Prefer lazygit (files + diff panes, ±counts, GitHub-PR feel). Fall back to a
+        // plain colorized `git status` + `git diff` through the pager when lazygit isn't
+        // installed, so the popup works everywhere.
+        let inner = format!(
+            "cd {} && if command -v lazygit >/dev/null 2>&1; then lazygit; \
+             else {{ git -c color.status=always status; echo; git -c color.ui=always diff; }} | {}; fi",
+            dir, pager
+        );
+        let tmux = Tmux::new(self.managed_server.clone());
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "90%", "-h", "90%", &inner])
             .status();
     }
 

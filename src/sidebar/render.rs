@@ -9,6 +9,7 @@ use ratatui::{
 use crate::session::ClaudeCodeStatus;
 use crate::config::{WINDOW_COLORS, AVAILABLE_MODELS, AVAILABLE_EFFORTS};
 use crate::history::relative_time;
+use crate::gitstatus::{summary_segments, SegKind};
 use super::{App, Mode};
 use super::mode::WorktreeStep;
 
@@ -205,6 +206,28 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         chars[..max.saturating_sub(1)].iter().collect::<String>() + "…"
     }
+}
+
+fn seg_color(kind: SegKind) -> Color {
+    match kind {
+        SegKind::Branch    => Color::Cyan,
+        SegKind::Ahead     => Color::Rgb(120, 170, 255),
+        SegKind::Behind    => Color::Rgb(120, 170, 255),
+        SegKind::Staged    => Color::Rgb(120, 200, 140),
+        SegKind::Unstaged  => Color::Rgb(220, 190, 100),
+        SegKind::Untracked => Color::Rgb(120, 130, 150),
+        SegKind::Clean     => Color::Rgb(110, 170, 120),
+    }
+}
+
+/// Color a porcelain XY code into a changed-file row color.
+fn file_color(code: &str) -> Color {
+    let x = code.chars().next().unwrap_or('.');
+    let y = code.chars().nth(1).unwrap_or('.');
+    if code == "??" { Color::Rgb(120, 130, 150) }              // untracked: gray
+    else if x != '.' && x != ' ' { Color::Rgb(120, 200, 140) } // staged: green
+    else if y != '.' && y != ' ' { Color::Rgb(220, 190, 100) } // unstaged: yellow
+    else { Color::Rgb(150, 160, 180) }
 }
 
 /// Extract meaningful content lines from above the Claude Code input field.
@@ -556,15 +579,36 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                     None
                 };
 
-                // ── Line 2: branch ────────────────────────────────────────────
+                // ── Line 2: branch (+ git summary for selected) ──────────────
+                // Compute selected pane's repo root once; reused for git section below.
+                let sel_repo: Option<std::path::PathBuf> = if is_sel {
+                    app.selected_pane()
+                        .map(|p| p.current_path.clone())
+                        .and_then(|p| crate::git::find_repo_root(&p))
+                } else {
+                    None
+                };
+                let show_summary = is_sel
+                    && app.gitstatus.is_some()
+                    && app.gitstatus_path.is_some()
+                    && sel_repo.as_deref() == app.gitstatus_path.as_deref();
+
                 let bar2 = Span::styled("▎", Style::default().fg(item.accent).bg(row_bg));
                 if let Some(ref pipe) = cont_pipe {
-                    lines.push(Line::from(vec![
-                        bar2, pipe.clone(),
-                        Span::styled(format!(" {}", item.branch),
-                            sp(if is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })),
-                        fill(),
-                    ]).style(base));
+                    let mut spans = vec![bar2, pipe.clone(), Span::raw(" ")];
+                    if show_summary {
+                        let segs = summary_segments(app.gitstatus.as_ref().unwrap());
+                        for (idx, (kind, text)) in segs.iter().enumerate() {
+                            if idx > 0 { spans.push(Span::raw(" ")); }
+                            spans.push(Span::styled(text.clone(),
+                                Style::default().fg(seg_color(*kind)).bg(row_bg)));
+                        }
+                    } else {
+                        spans.push(Span::styled(item.branch.clone(),
+                            sp(if is_sel { Color::Cyan } else { Color::Rgb(80, 90, 110) })));
+                    }
+                    spans.push(fill());
+                    lines.push(Line::from(spans).style(base));
                 } else {
                     lines.push(Line::from(vec![
                         bar2,
@@ -609,6 +653,47 @@ fn render_list(frame: &mut Frame, app: &mut App, area: Rect, sidebar_bg: Color) 
                         Span::styled(format!("  {}", item.path_short), sp(Color::Rgb(55, 58, 68))),
                         fill(),
                     ]).style(base));
+                }
+
+                // ── Git section (selected only) ───────────────────────────────
+                if is_sel {
+                    let matches = sel_repo.is_some()
+                        && sel_repo.as_deref() == app.gitstatus_path.as_deref();
+                    let dim = Color::Rgb(90, 100, 120);
+
+                    if sel_repo.is_some() && (!matches || app.gitstatus.is_none()) {
+                        // In a repo but status not ready yet — show loading placeholder.
+                        lines.push(Line::from(vec![
+                            Span::styled("▎", Style::default().fg(item.accent).bg(row_bg)),
+                            Span::styled(" ─ git … ─", sp(dim)),
+                            fill(),
+                        ]).style(base));
+                    } else if let Some(gs) = app.gitstatus.as_ref() {
+                        if !gs.files.is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::styled("▎", Style::default().fg(item.accent).bg(row_bg)),
+                                Span::styled(" ─ git ─────────", sp(dim)),
+                                fill(),
+                            ]).style(base));
+                            const N: usize = 6;
+                            for f in gs.files.iter().take(N) {
+                                let row = format!(" {} {}", f.code, f.path);
+                                let row = truncate(&row, inner_w.saturating_sub(2));
+                                lines.push(Line::from(vec![
+                                    Span::styled("▎", Style::default().fg(item.accent).bg(row_bg)),
+                                    Span::styled(row, Style::default().fg(file_color(&f.code)).bg(row_bg)),
+                                    fill(),
+                                ]).style(base));
+                            }
+                            if gs.files.len() > N {
+                                lines.push(Line::from(vec![
+                                    Span::styled("▎", Style::default().fg(item.accent).bg(row_bg)),
+                                    Span::styled(format!(" +{} more → (g)", gs.files.len() - N), sp(dim)),
+                                    fill(),
+                                ]).style(base));
+                            }
+                        }
+                    }
                 }
 
                 // ── Lines 4+: content preview ─────────────────────────────────
@@ -990,6 +1075,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         key("K"), hint(" kill"),
                     ]),
                     Line::from(vec![
+                        key("g"), hint(" git"), sep(),
                         key("s"), hint(" sticky"), sep(),
                         key("o"), hint(" houston"), sep(),
                         key("?"), hint(" help"), sep(),
@@ -1181,6 +1267,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("w",      "New worktree (fetch → branch → options)"),
         row("o",      "New worktree on ~/dev/houston"),
         row("h",      "Browse Claude history (preview / resume)"),
+        row("g",      "Git status popup (status + diff)"),
         row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),
