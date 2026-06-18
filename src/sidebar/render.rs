@@ -1179,6 +1179,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("c",      "New session — pick folder, launch Claude"),
         row("w",      "New worktree (fetch → branch → options)"),
         row("o",      "New worktree on ~/dev/houston"),
+        row("h",      "Browse Claude history (preview / resume)"),
         row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),
