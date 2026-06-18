@@ -1,3 +1,5 @@
+use std::path::Path;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitStatus {
     pub branch: String,
@@ -72,6 +74,19 @@ pub fn parse_status_v2(out: &str) -> GitStatus {
         }
     }
     s
+}
+
+/// Run `git status --porcelain=v2 --branch -z` in `repo_root` and parse it.
+/// Returns None if git fails (not a repo, git missing, etc.).
+pub fn run_status(repo_root: &Path) -> Option<GitStatus> {
+    let out = std::process::Command::new("git")
+        .args(["-C", &repo_root.to_string_lossy(),
+               "status", "--porcelain=v2", "--branch", "-z"])
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Some(parse_status_v2(&text))
 }
 
 /// The two-char XY status field of an entry token (`<type> <xy> ...`).
