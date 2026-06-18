@@ -1076,6 +1076,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     ]),
                     Line::from(vec![
                         key("g"), hint(" git"), sep(),
+                        key("p"), hint(" pr"), sep(),
                         key("s"), hint(" sticky"), sep(),
                         key("o"), hint(" houston"), sep(),
                         key("?"), hint(" help"), sep(),
@@ -1268,6 +1269,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("o",      "New worktree on ~/dev/houston"),
         row("h",      "Browse Claude history (preview / resume)"),
         row("g",      "Git status popup (status + diff)"),
+        row("p",      "PR status popup (gh pr view + checks)"),
         row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),

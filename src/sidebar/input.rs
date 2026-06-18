@@ -213,6 +213,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('g') => {
             app.open_git_popup();
         }
+        KeyCode::Char('p') => {
+            app.open_pr_popup();
+        }
         KeyCode::Char('w') => {
             app.start_worktree_flow();
         }
