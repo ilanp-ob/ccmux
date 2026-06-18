@@ -1,6 +1,7 @@
 mod config;
 mod detection;
 mod git;
+mod gitstatus;
 mod history;
 mod jobs;
 mod notify;
