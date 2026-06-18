@@ -1686,8 +1686,14 @@ impl App {
         // Prefer lazygit (files + diff panes, ±counts, GitHub-PR feel). Fall back to a
         // plain colorized `git status` + `git diff` through the pager when lazygit isn't
         // installed, so the popup works everywhere.
+        //
+        // display-popup runs under the tmux server's environment, which is often started
+        // without Homebrew's shellenv — so /opt/homebrew/bin (where lazygit lives) isn't on
+        // PATH and `command -v lazygit` would wrongly fall back. Prepend the standard macOS
+        // Homebrew bin dirs (Apple Silicon + Intel) so the lookup matches an interactive shell.
         let inner = format!(
-            "cd {} && if command -v lazygit >/dev/null 2>&1; then lazygit; \
+            "cd {} && export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\" && \
+             if command -v lazygit >/dev/null 2>&1; then lazygit; \
              else {{ git -c color.status=always status; echo; git -c color.ui=always diff; }} | {}; fi",
             dir, pager
         );
