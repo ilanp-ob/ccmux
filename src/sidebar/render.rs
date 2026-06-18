@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::session::ClaudeCodeStatus;
 use crate::config::{WINDOW_COLORS, AVAILABLE_MODELS, AVAILABLE_EFFORTS};
+use crate::history::relative_time;
 use super::{App, Mode};
 use super::mode::WorktreeStep;
 
@@ -169,6 +170,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::ActionMenu { .. } => render_action_menu_overlay(frame, app, inner),
         Mode::WorktreeFlow(_) => render_worktree_overlay(frame, app, inner),
         Mode::FolderPick(_) => render_folder_pick_overlay(frame, app, inner),
+        Mode::History(_) => render_history(frame, app, inner),
         _ => {}
     }
 
@@ -1867,5 +1869,208 @@ fn status_color(status: &ClaudeCodeStatus) -> Color {
         ClaudeCodeStatus::WaitingInput => Color::Yellow,
         ClaudeCodeStatus::Idle => Color::Cyan,
         ClaudeCodeStatus::Unknown => Color::DarkGray,
+    }
+}
+
+fn render_history(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::sidebar::mode::HistoryStep;
+
+    let bg = Color::Rgb(22, 25, 34);
+    let border_clr = Color::Rgb(80, 100, 160);
+    let title_clr = Color::Rgb(140, 170, 220);
+    let sel_bg = Color::Rgb(45, 55, 80);
+    let dim_clr = Color::Rgb(100, 110, 130);
+    let dead_clr = Color::Rgb(70, 75, 90);
+    let meta_clr = Color::Rgb(90, 100, 120);
+    let branch_clr = Color::Rgb(100, 200, 140);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_clr))
+        .title(Span::styled(" Session History ", Style::default().fg(title_clr)))
+        .style(Style::default().bg(bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    match &app.mode {
+        Mode::History(HistoryStep::Loading) => {
+            let line = Line::from(Span::styled(
+                " Loading Claude history\u{2026}",
+                Style::default().fg(dim_clr),
+            ));
+            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), inner);
+        }
+        Mode::History(HistoryStep::List { entries, filter, filter_cursor, cursor, .. }) => {
+            let h = inner.height as usize;
+            if h < 3 { return; }
+
+            // Row 0: filter input
+            let mut filter_spans = vec![Span::styled(" > ", Style::default().fg(border_clr).bg(bg))];
+            filter_spans.extend(text_with_cursor(
+                filter.as_str(),
+                *filter_cursor,
+                Style::default().fg(Color::White).bg(bg),
+                true,
+            ));
+            let filter_line = Line::from(filter_spans);
+
+            // Fuzzy filter entries
+            let filtered = crate::sidebar::input::fuzzy_sort(
+                entries,
+                filter,
+                |e| format!("{} {}", e.title, e.branch.clone().unwrap_or_default()),
+            );
+
+            let now = std::time::SystemTime::now();
+
+            // Build list rows (each entry = 2 lines: title + meta)
+            // A group header counts as 1 line.
+            // We compute rows first, then scroll.
+            struct HistRow<'a> {
+                is_header: bool,
+                entry_idx: Option<usize>, // index into filtered
+                label: String,
+                entry: Option<&'a crate::history::SessionEntry>,
+                is_meta: bool, // second display line of an entry
+            }
+
+            let mut rows: Vec<HistRow> = Vec::new();
+            let mut last_wt: Option<String> = None;
+
+            for (i, e) in filtered.iter().enumerate() {
+                if last_wt.as_deref() != Some(e.worktree_label.as_str()) {
+                    rows.push(HistRow {
+                        is_header: true,
+                        entry_idx: None,
+                        label: format!("\u{250c} {}", e.worktree_label),
+                        entry: None,
+                        is_meta: false,
+                    });
+                    last_wt = Some(e.worktree_label.clone());
+                }
+                // Title line
+                rows.push(HistRow {
+                    is_header: false,
+                    entry_idx: Some(i),
+                    label: format!("  {}", e.title),
+                    entry: Some(e),
+                    is_meta: false,
+                });
+                // Meta line
+                let meta = format!(
+                    "    {} \u{00b7} {} \u{00b7} {} msgs",
+                    relative_time(e.last_activity, now),
+                    e.branch.as_deref().unwrap_or("-"),
+                    e.msg_count
+                );
+                rows.push(HistRow {
+                    is_header: false,
+                    entry_idx: Some(i),
+                    label: meta,
+                    entry: Some(e),
+                    is_meta: true,
+                });
+            }
+
+            let list_h = h.saturating_sub(2); // filter line + hint line
+            let cursor = *cursor;
+
+            // Find the first display row that belongs to cursor entry to centre scroll
+            let cursor_row = rows.iter().position(|r| r.entry_idx == Some(cursor) && !r.is_meta)
+                .unwrap_or(0);
+            let scroll = if cursor_row >= list_h { cursor_row + 1 - list_h } else { 0 };
+
+            let mut list_lines: Vec<Line> = Vec::new();
+            for row in rows.iter().skip(scroll).take(list_h) {
+                if row.is_header {
+                    list_lines.push(Line::from(Span::styled(
+                        row.label.clone(),
+                        Style::default().fg(dim_clr).bg(bg),
+                    )));
+                    continue;
+                }
+                let e = match row.entry { Some(e) => e, None => continue };
+                let is_selected = row.entry_idx == Some(cursor);
+                let is_dead = !e.worktree_alive;
+
+                let line_bg = if is_selected { sel_bg } else { bg };
+
+                if row.is_meta {
+                    let meta_style = if is_dead {
+                        Style::default().fg(dead_clr).bg(line_bg)
+                    } else if is_selected {
+                        Style::default().fg(Color::Rgb(160, 175, 200)).bg(line_bg)
+                    } else {
+                        Style::default().fg(meta_clr).bg(line_bg)
+                    };
+                    // Extract branch and render with colour
+                    let parts: Vec<&str> = row.label.trim().splitn(3, " \u{00b7} ").collect();
+                    let time_str = parts.first().copied().unwrap_or("");
+                    let branch_str = parts.get(1).copied().unwrap_or("");
+                    let msgs_str = parts.get(2).copied().unwrap_or("");
+                    list_lines.push(Line::from(vec![
+                        Span::styled("    ", Style::default().bg(line_bg)),
+                        Span::styled(time_str.to_string(), meta_style),
+                        Span::styled(" \u{00b7} ", Style::default().fg(dim_clr).bg(line_bg)),
+                        Span::styled(
+                            branch_str.to_string(),
+                            if is_dead { meta_style } else { Style::default().fg(branch_clr).bg(line_bg) },
+                        ),
+                        Span::styled(" \u{00b7} ", Style::default().fg(dim_clr).bg(line_bg)),
+                        Span::styled(msgs_str.to_string(), meta_style),
+                    ]));
+                } else {
+                    let title_style = if is_dead {
+                        Style::default().fg(dead_clr).bg(line_bg)
+                    } else if is_selected {
+                        Style::default().fg(Color::White).bg(line_bg).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Rgb(200, 210, 230)).bg(line_bg)
+                    };
+                    list_lines.push(Line::from(Span::styled(row.label.clone(), title_style)));
+                }
+            }
+
+            if filtered.is_empty() {
+                list_lines.push(Line::from(Span::styled(
+                    " No Claude history for this repo.",
+                    Style::default().fg(dim_clr).bg(bg),
+                )));
+            }
+
+            // Pad remaining rows
+            while list_lines.len() < list_h {
+                list_lines.push(Line::from(Span::styled("", Style::default().bg(bg))));
+            }
+
+            // Hint row
+            let hint_line = Line::from(vec![
+                Span::styled(" Enter", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":preview  ", Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("^r", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":resume  ", Style::default().fg(dim_clr).bg(bg)),
+                Span::styled("Esc", Style::default().fg(border_clr).bg(bg)),
+                Span::styled(":back", Style::default().fg(dim_clr).bg(bg)),
+            ]);
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+
+            frame.render_widget(Paragraph::new(filter_line).style(Style::default().bg(bg)), chunks[0]);
+            frame.render_widget(
+                Paragraph::new(list_lines).style(Style::default().bg(bg)),
+                chunks[1],
+            );
+            frame.render_widget(Paragraph::new(hint_line).style(Style::default().bg(bg)), chunks[2]);
+        }
+        _ => {}
     }
 }

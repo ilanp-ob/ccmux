@@ -27,7 +27,7 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
 
 /// Filter and sort `items` by fuzzy score against `filter`. When `filter` is empty,
 /// all items are returned in original order. Key extracts the string to match against.
-fn fuzzy_sort<'a, T>(items: &'a [T], filter: &str, key: impl Fn(&T) -> String) -> Vec<&'a T> {
+pub(crate) fn fuzzy_sort<'a, T>(items: &'a [T], filter: &str, key: impl Fn(&T) -> String) -> Vec<&'a T> {
     let mut scored: Vec<(i32, &T)> = items.iter()
         .filter_map(|item| fuzzy_score(&key(item), filter).map(|s| (s, item)))
         .collect();
