@@ -23,6 +23,8 @@ pub enum Mode {
     ActionMenu { items: Vec<ActionItem>, cursor: usize },
     /// Folder picker for creating a new session in a chosen directory
     FolderPick(FolderPickStep),
+    /// Browsing Claude session history for the selected pane's repo.
+    History(HistoryStep),
 }
 
 // ─── Worktree flow ────────────────────────────────────────────────────────────
@@ -114,6 +116,23 @@ pub enum FolderPickStep {
         /// Whether the directory needs to be created (typed name that doesn't exist yet)
         is_new: bool,
         opts: WorktreeOpts,
+    },
+}
+
+// ─── History flow ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryStep {
+    /// Background scan of ~/.claude/projects in progress.
+    Loading,
+    /// Sessions loaded; user is filtering/navigating.
+    List {
+        entries: Vec<crate::history::SessionEntry>,
+        /// Repo main root — used as the resume fallback dir for dead worktrees.
+        repo_root: String,
+        filter: String,
+        filter_cursor: usize,
+        cursor: usize,
     },
 }
 

@@ -133,6 +133,9 @@ pub struct App {
     /// Background dir-scan thread for the folder picker.
     pub folder_scan_handle: Option<std::thread::JoinHandle<Vec<std::path::PathBuf>>>,
     pub folder_scan_root: Option<std::path::PathBuf>,
+    /// Background history-scan thread for the history browser.
+    pub history_handle: Option<std::thread::JoinHandle<Vec<crate::history::SessionEntry>>>,
+    pub history_repo_root: Option<String>,
     last_nav_hint_tick: Instant,
     pub global_info: GlobalInfo,
     last_global_info_tick: Instant,
@@ -239,6 +242,8 @@ impl App {
             fetch_repo_root: None,
             folder_scan_handle: None,
             folder_scan_root: None,
+            history_handle: None,
+            history_repo_root: None,
             last_nav_hint_tick: Instant::now(),
             global_info: GlobalInfo::load(),
             last_global_info_tick: Instant::now(),
@@ -980,6 +985,35 @@ impl App {
         let dirs = handle.join().unwrap_or_default();
         let root = self.folder_scan_root.take().unwrap_or_default();
         self.mode = Mode::FolderPick(FolderPickStep::Picking { root, dirs, filter: String::new(), filter_cursor: 0, cursor: 0 });
+        true
+    }
+
+    /// Begin loading Claude history for the selected pane's repo.
+    pub fn start_history(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let cwd = pane.current_path.clone();
+        let Some(repo_root) = crate::git::find_main_repo_root(&cwd) else {
+            self.set_message("Not inside a git repository");
+            return;
+        };
+        let current_cwd = cwd.to_string_lossy().to_string();
+        self.history_repo_root = Some(repo_root.to_string_lossy().to_string());
+        let repo_root_clone = repo_root.clone();
+        self.history_handle = Some(std::thread::spawn(move || {
+            crate::history::scan_repo_sessions(&repo_root_clone, &current_cwd)
+        }));
+        self.mode = Mode::History(crate::sidebar::mode::HistoryStep::Loading);
+    }
+
+    /// Check whether the background history scan finished. Returns true if mode changed.
+    pub fn tick_history(&mut self) -> bool {
+        let done = self.history_handle.as_ref().map(|h| h.is_finished()).unwrap_or(false);
+        if !done { return false; }
+        let entries = self.history_handle.take().unwrap().join().unwrap_or_default();
+        let repo_root = self.history_repo_root.take().unwrap_or_default();
+        self.mode = Mode::History(crate::sidebar::mode::HistoryStep::List {
+            entries, repo_root, filter: String::new(), filter_cursor: 0, cursor: 0,
+        });
         true
     }
 

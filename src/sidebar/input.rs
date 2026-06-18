@@ -113,6 +113,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::WorktreeFlow(_) => handle_worktree(app, key),
         Mode::ActionMenu { .. } => handle_action_menu(app, key),
         Mode::FolderPick(_) => handle_folder_pick(app, key),
+        Mode::History(_) => {},
     }
 }
 

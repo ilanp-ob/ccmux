@@ -1062,6 +1062,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         Mode::WorktreeFlow(_) => {}
         Mode::FolderPick(_) => {}
+        Mode::History(_) => {}
     }
 }
 
