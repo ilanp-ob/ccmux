@@ -1683,14 +1683,17 @@ impl App {
         };
         let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
         let dir = shell_quote(&repo.to_string_lossy());
-        // status then diff, both colorized, through the pager.
+        // Prefer lazygit (files + diff panes, ±counts, GitHub-PR feel). Fall back to a
+        // plain colorized `git status` + `git diff` through the pager when lazygit isn't
+        // installed, so the popup works everywhere.
         let inner = format!(
-            "cd {} && {{ git -c color.status=always status; echo; git -c color.ui=always diff; }} | {}",
+            "cd {} && if command -v lazygit >/dev/null 2>&1; then lazygit; \
+             else {{ git -c color.status=always status; echo; git -c color.ui=always diff; }} | {}; fi",
             dir, pager
         );
         let tmux = Tmux::new(self.managed_server.clone());
         let _ = tmux.cmd()
-            .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &inner])
+            .args(["display-popup", "-E", "-w", "90%", "-h", "90%", &inner])
             .status();
     }
 
