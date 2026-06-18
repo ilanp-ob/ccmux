@@ -1611,6 +1611,13 @@ impl App {
     /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
     /// exists; otherwise falls back to the repo main root and notes it.
     pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {
+        // entry.id comes from a session-file name; never interpolate untrusted text
+        // into a shell command. Session ids are UUIDs ([A-Za-z0-9-]).
+        if entry.id.is_empty() || !entry.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            self.error = Some(format!("Refusing to resume: invalid session id '{}'", entry.id));
+            return;
+        }
+
         let mut dir = entry.cwd.clone();
         let mut fell_back = false;
         if !std::path::Path::new(&dir).is_dir() {
