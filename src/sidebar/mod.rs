@@ -1625,21 +1625,26 @@ impl App {
             fell_back = true;
         }
         let name = if entry.worktree_label.is_empty() { "resume".to_string() } else { entry.worktree_label.clone() };
-        let cmd = format!("claude --resume {}", entry.id);
         let tmux = Tmux::new(self.managed_server.clone());
-        match tmux.new_window_cmd(&self.managed_session, &name, std::path::Path::new(&dir), &cmd) {
-            Ok(window_id) => {
-                self.ensure_sidebar_in_window(&window_id, None);
-                if fell_back {
-                    self.set_message(format!("Resumed in repo root (original worktree gone): {}", name));
-                } else {
-                    self.set_message(format!("Resumed: {}", entry.title));
-                }
-                self.mode = Mode::Normal;
-                let _ = self.refresh();
-            }
-            Err(e) => self.set_message(format!("Resume failed: {}", e)),
+
+        // Launch claude inside a shell (new_window + send_keys), NOT as the window's sole
+        // process via new_window_cmd. If `claude --resume` exits — e.g. the session is
+        // already open elsewhere, or the id can't be resolved — the shell survives, so the
+        // window stays put with the error visible instead of closing and bouncing focus
+        // back to the previous window. Mirrors execute_folder_pick / execute_worktree.
+        let window_id = match tmux.new_window(&self.managed_session, &name, std::path::Path::new(&dir)) {
+            Ok(id) => id,
+            Err(e) => { self.set_message(format!("Resume failed: {}", e)); return; }
+        };
+        let _ = tmux.send_keys(&window_id, &format!("claude --resume {}", entry.id));
+        self.ensure_sidebar_in_window(&window_id, None);
+        if fell_back {
+            self.set_message(format!("Resumed in repo root (original worktree gone): {}", name));
+        } else {
+            self.set_message(format!("Resumed: {}", entry.title));
         }
+        self.mode = Mode::Normal;
+        let _ = self.refresh();
     }
 }
 
