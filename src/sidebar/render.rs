@@ -977,7 +977,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                         key("j/k"), hint(" nav"), sep(),
                         if is_job { key("Enter") } else { key("Enter") },
                         hint(if is_job { " open" } else { " focus" }), sep(),
-                        key("1-9"), hint(" jump"),
+                        key("1-9"), hint(" jump"), sep(),
+                        key("h"), hint(" cc history"),
                     ]),
                     Line::from(vec![
                         key("i"), hint(if is_job { " reply" } else { " send" }), sep(),
