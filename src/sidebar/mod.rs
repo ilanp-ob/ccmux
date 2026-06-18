@@ -1730,6 +1730,45 @@ impl App {
             .status();
     }
 
+    /// Open a popup file browser for the selected pane's project: drill-down folder
+    /// navigation (eza-tree / bat preview) that opens the chosen file in an in-terminal
+    /// editor ($CCMUX_EDITOR, default nano — never vim). Read-only browse.
+    pub fn open_folder_popup(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let start = crate::git::find_repo_root(&pane.current_path)
+            .unwrap_or_else(|| pane.current_path.clone());
+
+        // The drill-down loop is multi-line shell, so it's embedded and written to a temp
+        // file rather than crammed into one display-popup command string.
+        let script_path = std::env::temp_dir().join("ccmux-browse.sh");
+        if std::fs::write(&script_path, BROWSE_SH).is_err() {
+            self.set_message("Could not write browse script");
+            return;
+        }
+
+        let dir = shell_quote(&start.to_string_lossy());
+        let script = shell_quote(&script_path.to_string_lossy());
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        // CCMUX_EDITOR passthrough: display-popup runs under the tmux server env, which may
+        // not carry it; bake the value in when set so the script's default-nano honors it.
+        let editor_prefix = match std::env::var("CCMUX_EDITOR") {
+            Ok(e) if !e.is_empty() => format!("CCMUX_EDITOR={} ", shell_quote(&e)),
+            _ => String::new(),
+        };
+        // fzf is MacPorts (/opt/local/bin); bat/fd/eza are Homebrew; nano is /usr/bin;
+        // a `code` override lives in /usr/local/bin — prepend all so the popup shell finds them.
+        let inner = format!(
+            "export PATH=\"/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:$PATH\" && \
+             if command -v fzf >/dev/null 2>&1; then {}sh {} {}; \
+             else echo 'fzf not installed' | {}; fi",
+            editor_prefix, script, dir, pager
+        );
+        let tmux = Tmux::new(self.managed_server.clone());
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "90%", "-h", "90%", &inner])
+            .status();
+    }
+
     /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
     /// exists; otherwise falls back to the repo main root and notes it.
     pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {
@@ -1774,3 +1813,27 @@ impl App {
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
+
+/// Embedded drill-down folder browser run inside the `f` popup. Lists the current
+/// directory (dirs first) plus `../`; previews folders with `eza --tree` and files with
+/// `bat`; descends into folders, ascends via `../`, and opens a chosen file in
+/// `$CCMUX_EDITOR` (default nano — never vim), in-terminal. fzf quotes `{}` itself, so the
+/// preview must NOT wrap `{}` in quotes.
+const BROWSE_SH: &str = r#"#!/bin/sh
+dir="${1:-$PWD}"
+cd "$dir" 2>/dev/null || exit 0
+editor="${CCMUX_EDITOR:-nano}"
+while true; do
+  sel=$( { printf '../\n'; eza -1 --group-directories-first 2>/dev/null || ls -1; } | \
+    fzf --header="$(pwd)" --reverse \
+        --preview 'if [ {} = ../ ]; then eza --tree --level=2 --color=always ..; \
+                   elif [ -d {} ]; then eza --tree --level=2 --color=always -- {}; \
+                   else bat --color=always --style=numbers -- {} 2>/dev/null || cat -- {}; fi' \
+        --preview-window=right:65% ) || exit 0
+  [ -z "$sel" ] && exit 0
+  if [ "$sel" = "../" ]; then cd .. 2>/dev/null || exit 0
+  elif [ -d "$sel" ]; then cd "$sel" 2>/dev/null || exit 0
+  else "$editor" "$sel"; exit 0
+  fi
+done
+"#;
