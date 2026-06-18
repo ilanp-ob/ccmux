@@ -1588,4 +1588,55 @@ impl App {
 
         items
     }
+
+    /// Open a wide tmux popup showing the session's formatted transcript via the pager.
+    /// Blocks (modally) until the popup is dismissed — fine, the popup owns the screen.
+    pub fn preview_session(&mut self, entry: &crate::history::SessionEntry) {
+        let text = std::fs::read_to_string(&entry.file_path).unwrap_or_default();
+        let rendered = crate::history::render_transcript(&text, 200);
+        let tmp = std::env::temp_dir().join(format!("ccmux-history-{}.txt", entry.id));
+        if let Err(e) = std::fs::write(&tmp, rendered) {
+            self.error = Some(format!("Preview failed: {}", e));
+            return;
+        }
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let tmux = Tmux::new(self.managed_server.clone());
+        // -E closes the popup when the command exits; single shell-command arg.
+        let cmd = format!("{} {}", pager, shell_quote(&tmp.to_string_lossy()));
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &cmd])
+            .status();
+    }
+
+    /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
+    /// exists; otherwise falls back to the repo main root and notes it.
+    pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {
+        let mut dir = entry.cwd.clone();
+        let mut fell_back = false;
+        if !std::path::Path::new(&dir).is_dir() {
+            dir = repo_root.to_string();
+            fell_back = true;
+        }
+        let name = if entry.worktree_label.is_empty() { "resume".to_string() } else { entry.worktree_label.clone() };
+        let cmd = format!("claude --resume {}", entry.id);
+        let tmux = Tmux::new(self.managed_server.clone());
+        match tmux.new_window_cmd(&self.managed_session, &name, std::path::Path::new(&dir), &cmd) {
+            Ok(window_id) => {
+                self.ensure_sidebar_in_window(&window_id, None);
+                if fell_back {
+                    self.set_message(format!("Resumed in repo root (original worktree gone): {}", name));
+                } else {
+                    self.set_message(format!("Resumed: {}", entry.title));
+                }
+                self.mode = Mode::Normal;
+                let _ = self.refresh();
+            }
+            Err(e) => self.error = Some(format!("Resume failed: {}", e)),
+        }
+    }
+}
+
+/// Wrap a string in single quotes for safe use in a shell command.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
