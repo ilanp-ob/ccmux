@@ -133,6 +133,9 @@ pub struct App {
     /// Background dir-scan thread for the folder picker.
     pub folder_scan_handle: Option<std::thread::JoinHandle<Vec<std::path::PathBuf>>>,
     pub folder_scan_root: Option<std::path::PathBuf>,
+    /// Background history-scan thread for the history browser.
+    pub history_handle: Option<std::thread::JoinHandle<Vec<crate::history::SessionEntry>>>,
+    pub history_repo_root: Option<String>,
     last_nav_hint_tick: Instant,
     pub global_info: GlobalInfo,
     last_global_info_tick: Instant,
@@ -239,6 +242,8 @@ impl App {
             fetch_repo_root: None,
             folder_scan_handle: None,
             folder_scan_root: None,
+            history_handle: None,
+            history_repo_root: None,
             last_nav_hint_tick: Instant::now(),
             global_info: GlobalInfo::load(),
             last_global_info_tick: Instant::now(),
@@ -983,6 +988,35 @@ impl App {
         true
     }
 
+    /// Begin loading Claude history for the selected pane's repo.
+    pub fn start_history(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let cwd = pane.current_path.clone();
+        let Some(repo_root) = crate::git::find_main_repo_root(&cwd) else {
+            self.set_message("Not inside a git repository");
+            return;
+        };
+        let current_cwd = cwd.to_string_lossy().to_string();
+        self.history_repo_root = Some(repo_root.to_string_lossy().to_string());
+        let repo_root_clone = repo_root.clone();
+        self.history_handle = Some(std::thread::spawn(move || {
+            crate::history::scan_repo_sessions(&repo_root_clone, &current_cwd)
+        }));
+        self.mode = Mode::History(crate::sidebar::mode::HistoryStep::Loading);
+    }
+
+    /// Check whether the background history scan finished. Returns true if mode changed.
+    pub fn tick_history(&mut self) -> bool {
+        let done = self.history_handle.as_ref().map(|h| h.is_finished()).unwrap_or(false);
+        if !done { return false; }
+        let entries = self.history_handle.take().unwrap().join().unwrap_or_default();
+        let repo_root = self.history_repo_root.take().unwrap_or_default();
+        self.mode = Mode::History(crate::sidebar::mode::HistoryStep::List {
+            entries, repo_root, filter: String::new(), filter_cursor: 0, cursor: 0,
+        });
+        true
+    }
+
     pub fn navigate_folder_into(&mut self, path: std::path::PathBuf) {
         use crate::sidebar::mode::FolderPickStep;
         self.folder_scan_root = Some(path.clone());
@@ -1554,4 +1588,67 @@ impl App {
 
         items
     }
+
+    /// Open a wide tmux popup showing the session's formatted transcript via the pager.
+    /// Blocks (modally) until the popup is dismissed — fine, the popup owns the screen.
+    pub fn preview_session(&mut self, entry: &crate::history::SessionEntry) {
+        let text = std::fs::read_to_string(&entry.file_path).unwrap_or_default();
+        let rendered = crate::history::render_transcript(&text, 200);
+        let tmp = std::env::temp_dir().join(format!("ccmux-history-{}.txt", entry.id));
+        if let Err(e) = std::fs::write(&tmp, rendered) {
+            self.set_message(format!("Preview failed: {}", e));
+            return;
+        }
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let tmux = Tmux::new(self.managed_server.clone());
+        // -E closes the popup when the command exits; single shell-command arg.
+        let cmd = format!("{} {}", pager, shell_quote(&tmp.to_string_lossy()));
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &cmd])
+            .status();
+    }
+
+    /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
+    /// exists; otherwise falls back to the repo main root and notes it.
+    pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {
+        // entry.id comes from a session-file name; never interpolate untrusted text
+        // into a shell command. Session ids are UUIDs ([A-Za-z0-9-]).
+        if entry.id.is_empty() || !entry.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            self.set_message(format!("Refusing to resume: invalid session id '{}'", entry.id));
+            return;
+        }
+
+        let mut dir = entry.cwd.clone();
+        let mut fell_back = false;
+        if !std::path::Path::new(&dir).is_dir() {
+            dir = repo_root.to_string();
+            fell_back = true;
+        }
+        let name = if entry.worktree_label.is_empty() { "resume".to_string() } else { entry.worktree_label.clone() };
+        let tmux = Tmux::new(self.managed_server.clone());
+
+        // Launch claude inside a shell (new_window + send_keys), NOT as the window's sole
+        // process via new_window_cmd. If `claude --resume` exits — e.g. the session is
+        // already open elsewhere, or the id can't be resolved — the shell survives, so the
+        // window stays put with the error visible instead of closing and bouncing focus
+        // back to the previous window. Mirrors execute_folder_pick / execute_worktree.
+        let window_id = match tmux.new_window(&self.managed_session, &name, std::path::Path::new(&dir)) {
+            Ok(id) => id,
+            Err(e) => { self.set_message(format!("Resume failed: {}", e)); return; }
+        };
+        let _ = tmux.send_keys(&window_id, &format!("claude --resume {}", entry.id));
+        self.ensure_sidebar_in_window(&window_id, None);
+        if fell_back {
+            self.set_message(format!("Resumed in repo root (original worktree gone): {}", name));
+        } else {
+            self.set_message(format!("Resumed: {}", entry.title));
+        }
+        self.mode = Mode::Normal;
+        let _ = self.refresh();
+    }
+}
+
+/// Wrap a string in single quotes for safe use in a shell command.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }

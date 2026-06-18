@@ -27,7 +27,7 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
 
 /// Filter and sort `items` by fuzzy score against `filter`. When `filter` is empty,
 /// all items are returned in original order. Key extracts the string to match against.
-fn fuzzy_sort<'a, T>(items: &'a [T], filter: &str, key: impl Fn(&T) -> String) -> Vec<&'a T> {
+pub(crate) fn fuzzy_sort<'a, T>(items: &'a [T], filter: &str, key: impl Fn(&T) -> String) -> Vec<&'a T> {
     let mut scored: Vec<(i32, &T)> = items.iter()
         .filter_map(|item| fuzzy_score(&key(item), filter).map(|s| (s, item)))
         .collect();
@@ -113,6 +113,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::WorktreeFlow(_) => handle_worktree(app, key),
         Mode::ActionMenu { .. } => handle_action_menu(app, key),
         Mode::FolderPick(_) => handle_folder_pick(app, key),
+        Mode::History(_) => handle_history(app, key),
     }
 }
 
@@ -205,6 +206,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char('c') => {
             app.start_folder_pick();
+        }
+        KeyCode::Char('h') => {
+            app.start_history();
         }
         KeyCode::Char('w') => {
             app.start_worktree_flow();
@@ -662,6 +666,75 @@ fn handle_worktree_options(
                 }
             }
         }
+    }
+}
+
+fn handle_history(app: &mut App, key: KeyEvent) {
+    use super::mode::HistoryStep;
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    // Esc always exits the browser.
+    if key.code == KeyCode::Esc {
+        app.mode = Mode::Normal;
+        return;
+    }
+
+    // While loading, ignore everything except Esc (handled above).
+    let (entries, repo_root, filter, filter_cursor, cursor) = match &app.mode {
+        Mode::History(HistoryStep::List { entries, repo_root, filter, filter_cursor, cursor }) =>
+            (entries.clone(), repo_root.clone(), filter.clone(), *filter_cursor, *cursor),
+        _ => return,
+    };
+
+    // Compute the currently-filtered view (same fuzzy idiom as the branch/folder pickers).
+    let filtered: Vec<&crate::history::SessionEntry> =
+        fuzzy_sort(&entries, &filter, |e| format!("{} {}", e.title, e.branch.clone().unwrap_or_default()));
+
+    match key.code {
+        KeyCode::Up => {
+            let new_cursor = if cursor == 0 { 0 } else { cursor - 1 };
+            set_history_cursor(app, new_cursor);
+        }
+        KeyCode::Down => {
+            let max = filtered.len().saturating_sub(1);
+            set_history_cursor(app, (cursor + 1).min(max));
+        }
+        KeyCode::Char('n') if ctrl => {
+            let max = filtered.len().saturating_sub(1);
+            set_history_cursor(app, (cursor + 1).min(max));
+        }
+        KeyCode::Char('p') if ctrl => {
+            let new_cursor = if cursor == 0 { 0 } else { cursor - 1 };
+            set_history_cursor(app, new_cursor);
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = filtered.get(cursor).copied().cloned() {
+                app.preview_session(&entry);
+            }
+        }
+        KeyCode::Char('r') if ctrl => {
+            if let Some(entry) = filtered.get(cursor).copied().cloned() {
+                app.resume_session(&entry, &repo_root);
+            }
+        }
+        _ => {
+            // Text editing on the filter; reset cursor to 0 when the filter changes.
+            if let Some((new_text, new_cur)) = apply_text_key(&filter, filter_cursor, &key) {
+                if let Mode::History(HistoryStep::List { filter, filter_cursor, cursor, .. }) = &mut app.mode {
+                    let changed = *filter != new_text;
+                    *filter = new_text;
+                    *filter_cursor = new_cur;
+                    if changed { *cursor = 0; }
+                }
+            }
+        }
+    }
+}
+
+/// Set the list cursor inside `Mode::History(List)`.
+fn set_history_cursor(app: &mut App, new_cursor: usize) {
+    if let Mode::History(super::mode::HistoryStep::List { cursor, .. }) = &mut app.mode {
+        *cursor = new_cursor;
     }
 }
 
