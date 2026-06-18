@@ -343,6 +343,10 @@ fn run_sidebar_loop(
             needs_redraw = true;
         }
 
+        if app.tick_gitstatus() {
+            needs_redraw = true;
+        }
+
         if app.tick_nav_hint() {
             needs_redraw = true;
         }
