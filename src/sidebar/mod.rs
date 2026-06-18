@@ -1674,6 +1674,26 @@ impl App {
             .status();
     }
 
+    /// Open a popup with full `git status` + `git diff` for the selected repo (read-only).
+    pub fn open_git_popup(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let Some(repo) = crate::git::find_repo_root(&pane.current_path) else {
+            self.set_message("Not a git repository");
+            return;
+        };
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let dir = shell_quote(&repo.to_string_lossy());
+        // status then diff, both colorized, through the pager.
+        let inner = format!(
+            "cd {} && {{ git -c color.status=always status; echo; git -c color.ui=always diff; }} | {}",
+            dir, pager
+        );
+        let tmux = Tmux::new(self.managed_server.clone());
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "85%", "-h", "85%", &inner])
+            .status();
+    }
+
     /// Resume a session in a new tmux window. Uses the session's recorded cwd if it still
     /// exists; otherwise falls back to the repo main root and notes it.
     pub fn resume_session(&mut self, entry: &crate::history::SessionEntry, repo_root: &str) {
