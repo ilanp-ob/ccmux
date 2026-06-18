@@ -108,6 +108,15 @@ pub fn truncate_title(s: &str, max: usize) -> String {
     }
 }
 
+/// Human-readable "time ago". Buckets: just now / Nm / Nh / Nd ago.
+pub fn relative_time(then: std::time::SystemTime, now: std::time::SystemTime) -> String {
+    let secs = now.duration_since(then).map(|d| d.as_secs()).unwrap_or(0);
+    if secs < 60 { "just now".to_string() }
+    else if secs < 3600 { format!("{}m ago", secs / 60) }
+    else if secs < 86400 { format!("{}h ago", secs / 3600) }
+    else { format!("{}d ago", secs / 86400) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +151,22 @@ mod tests {
     fn returns_none_for_no_messages() {
         let only_meta = "{\"type\":\"attachment\",\"cwd\":\"/x\"}";
         assert!(parse_session_meta(only_meta, PathBuf::from("/p/q.jsonl"), SystemTime::UNIX_EPOCH).is_none());
+    }
+
+    #[test]
+    fn truncate_title_collapses_and_cuts() {
+        assert_eq!(truncate_title("short", 60), "short");
+        assert_eq!(truncate_title("a\n  b\tc", 60), "a b c");
+        assert_eq!(truncate_title("abcdefghij", 5), "abcd…");
+    }
+
+    #[test]
+    fn relative_time_buckets() {
+        use std::time::Duration;
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        assert_eq!(relative_time(now, now), "just now");
+        assert_eq!(relative_time(now - Duration::from_secs(120), now), "2m ago");
+        assert_eq!(relative_time(now - Duration::from_secs(7200), now), "2h ago");
+        assert_eq!(relative_time(now - Duration::from_secs(3 * 86400), now), "3d ago");
     }
 }
