@@ -93,6 +93,26 @@ fn tally(s: &mut GitStatus, xy: &str) {
     if y != '.' { s.unstaged += 1; }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegKind { Branch, Ahead, Behind, Staged, Unstaged, Untracked, Clean }
+
+/// Build the summary line as typed segments, omitting zero counts.
+/// A clean repo (no changes) yields Branch + Clean("✓").
+pub fn summary_segments(s: &GitStatus) -> Vec<(SegKind, String)> {
+    let mut v = vec![(SegKind::Branch, s.branch.clone())];
+    if s.has_upstream {
+        if s.ahead > 0 { v.push((SegKind::Ahead, format!("↑{}", s.ahead))); }
+        if s.behind > 0 { v.push((SegKind::Behind, format!("↓{}", s.behind))); }
+    }
+    if s.staged > 0 { v.push((SegKind::Staged, format!("●{}", s.staged))); }
+    if s.unstaged > 0 { v.push((SegKind::Unstaged, format!("+{}", s.unstaged))); }
+    if s.untracked > 0 { v.push((SegKind::Untracked, format!("?{}", s.untracked))); }
+    if s.staged == 0 && s.unstaged == 0 && s.untracked == 0 {
+        v.push((SegKind::Clean, "✓".to_string()));
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +173,31 @@ mod tests {
         assert_eq!((s.staged, s.unstaged, s.untracked), (0, 0, 0));
         assert!(s.files.is_empty());
         assert!(s.has_upstream);
+    }
+
+    #[test]
+    fn summary_omits_zero_segments() {
+        let s = GitStatus {
+            branch: "main".into(), ahead: 2, behind: 0,
+            staged: 3, unstaged: 5, untracked: 2, files: vec![], has_upstream: true,
+        };
+        let segs = summary_segments(&s);
+        assert_eq!(segs, vec![
+            (SegKind::Branch, "main".to_string()),
+            (SegKind::Ahead, "↑2".to_string()),
+            (SegKind::Staged, "●3".to_string()),
+            (SegKind::Unstaged, "+5".to_string()),
+            (SegKind::Untracked, "?2".to_string()),
+        ]); // behind=0 omitted
+    }
+
+    #[test]
+    fn summary_clean_repo_shows_check() {
+        let s = GitStatus { branch: "main".into(), has_upstream: true, ..Default::default() };
+        let segs = summary_segments(&s);
+        assert_eq!(segs, vec![
+            (SegKind::Branch, "main".to_string()),
+            (SegKind::Clean, "✓".to_string()),
+        ]);
     }
 }
