@@ -1978,7 +1978,7 @@ fn render_history(frame: &mut Frame, app: &App, area: Rect) {
             let list_h = h.saturating_sub(2); // filter line + hint line
             let cursor = *cursor;
 
-            // Find the first display row that belongs to cursor entry to centre scroll
+            // Scroll just enough to keep the cursor row visible (bottom-anchored, not centered)
             let cursor_row = rows.iter().position(|r| r.entry_idx == Some(cursor) && !r.is_meta)
                 .unwrap_or(0);
             let scroll = if cursor_row >= list_h { cursor_row + 1 - list_h } else { 0 };

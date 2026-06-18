@@ -202,6 +202,8 @@ pub fn group_by_repo(
         }
     }).collect();
 
+    // Current worktree first, then by recency. Non-current worktrees are NOT clustered,
+    // so the renderer's group headers may repeat for a worktree whose sessions are non-contiguous.
     kept.sort_by(|a, b| {
         let a_cur = a.cwd == current_cwd;
         let b_cur = b.cwd == current_cwd;

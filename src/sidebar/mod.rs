@@ -1596,7 +1596,7 @@ impl App {
         let rendered = crate::history::render_transcript(&text, 200);
         let tmp = std::env::temp_dir().join(format!("ccmux-history-{}.txt", entry.id));
         if let Err(e) = std::fs::write(&tmp, rendered) {
-            self.error = Some(format!("Preview failed: {}", e));
+            self.set_message(format!("Preview failed: {}", e));
             return;
         }
         let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
@@ -1614,7 +1614,7 @@ impl App {
         // entry.id comes from a session-file name; never interpolate untrusted text
         // into a shell command. Session ids are UUIDs ([A-Za-z0-9-]).
         if entry.id.is_empty() || !entry.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            self.error = Some(format!("Refusing to resume: invalid session id '{}'", entry.id));
+            self.set_message(format!("Refusing to resume: invalid session id '{}'", entry.id));
             return;
         }
 
@@ -1638,7 +1638,7 @@ impl App {
                 self.mode = Mode::Normal;
                 let _ = self.refresh();
             }
-            Err(e) => self.error = Some(format!("Resume failed: {}", e)),
+            Err(e) => self.set_message(format!("Resume failed: {}", e)),
         }
     }
 }
