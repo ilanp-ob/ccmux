@@ -1,5 +1,65 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+/// Resolve a path's git common dir (shared across all worktrees of a repo).
+/// Returns an absolute, canonicalized path, or None if `path` isn't in a repo.
+pub fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    if !path.is_dir() { return None; }
+    let out = std::process::Command::new("git")
+        .args(["-C", &path.to_string_lossy(), "rev-parse", "--git-common-dir"])
+        .output().ok()?;
+    if !out.status.success() { return None; }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if raw.is_empty() { return None; }
+    let p = PathBuf::from(&raw);
+    // git may return a relative ".git"; resolve against the queried path.
+    let abs = if p.is_absolute() { p } else { path.join(p) };
+    abs.canonicalize().ok().or(Some(abs))
+}
+
+/// The `~/.claude/projects` directory.
+fn projects_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
+    PathBuf::from(home).join(".claude").join("projects")
+}
+
+/// Gather every session `.jsonl` belonging to `repo_root`'s repo, across all worktrees.
+/// `current_cwd` is the selected pane's path, used to sort its sessions first.
+pub fn scan_repo_sessions(repo_root: &Path, current_cwd: &str) -> Vec<SessionEntry> {
+    let Some(target) = git_common_dir(repo_root) else { return Vec::new() };
+    let projects = projects_dir();
+
+    let mut entries: Vec<SessionEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    let Ok(dirs) = std::fs::read_dir(&projects) else { return Vec::new() };
+    for dir in dirs.flatten() {
+        // Skip symlinked project dirs to avoid double-counting (git-aware-history consolidation).
+        match dir.file_type() {
+            Ok(ft) if ft.is_symlink() => continue,
+            _ => {}
+        }
+        let dpath = dir.path();
+        if !dpath.is_dir() { continue; }
+        let Ok(files) = std::fs::read_dir(&dpath) else { continue };
+        for f in files.flatten() {
+            let fpath = f.path();
+            if fpath.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue; }
+            let canon = fpath.canonicalize().unwrap_or_else(|_| fpath.clone());
+            if !seen.insert(canon) { continue; }
+            let Ok(text) = std::fs::read_to_string(&fpath) else { continue };
+            let mtime = std::fs::metadata(&fpath)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if let Some(mut e) = parse_session_meta(&text, fpath.clone(), mtime) {
+                e.worktree_alive = Path::new(&e.cwd).is_dir();
+                entries.push(e);
+            }
+        }
+    }
+
+    group_by_repo(entries, |cwd| git_common_dir(Path::new(cwd)), &target, repo_root, current_cwd)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEntry {
