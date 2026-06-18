@@ -101,6 +101,7 @@ These mirror the in-app help — press `?` inside the sidebar to see them.
 | `h` | Browse Claude history for this repo (preview / resume past sessions) |
 | `g` | Git status popup — full `git status` + `diff` for the selected repo |
 | `p` | PR status popup — `gh pr view` + checks for the selected branch |
+| `f` | Folder browser — drill-down file tree with preview; opens files in `$CCMUX_EDITOR` (default `nano`) |
 | `e` | Edit the current window — name and color |
 | `K` | Kill the current window (with confirmation) |
 
@@ -161,6 +162,11 @@ since the last check to decide between "still working" and "settled".
   overview (`gh pr view`) and CI checks (`gh pr checks`): state, reviewers,
   mergeable, pass/fail. On-demand only — gh runs when you press the key, so
   there's no background API traffic.
+- **Folder browser** — `f` opens a drill-down file browser for the selected window's
+  project: navigate folders (`../` to ascend), with a tree preview (`eza --tree`) for
+  folders and a syntax-highlighted preview (`bat`) for files. Enter opens the file in an
+  in-terminal editor — `$CCMUX_EDITOR` if set, otherwise `nano` (never vim). Built on
+  `fzf`/`fd`/`eza`/`bat`.
 - **Window management** — rename and recolor windows (`e`), create (`c`) or kill
   (`K`) them. Colors persist in a tmux variable and can drive the status bar.
 - **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace

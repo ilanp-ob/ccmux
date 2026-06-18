@@ -1270,6 +1270,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("h",      "Browse Claude history (preview / resume)"),
         row("g",      "Git status popup (status + diff)"),
         row("p",      "PR status popup (gh pr view + checks)"),
+        row("f",      "Folder browser (tree + preview, edit)"),
         row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),

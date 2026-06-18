@@ -216,6 +216,9 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('p') => {
             app.open_pr_popup();
         }
+        KeyCode::Char('f') => {
+            app.open_folder_popup();
+        }
         KeyCode::Char('w') => {
             app.start_worktree_flow();
         }
