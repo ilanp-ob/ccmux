@@ -151,6 +151,114 @@ pub fn group_by_repo(
     kept
 }
 
+/// Render a session `.jsonl` into readable transcript text for a pager.
+pub fn render_transcript(jsonl: &str, max_turns: usize) -> String {
+    let mut turns: Vec<String> = Vec::new();
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                if let Some(text) = render_user_turn(&v) {
+                    turns.push(format!("▶ You\n{}", text));
+                }
+            }
+            Some("assistant") => {
+                let body = render_assistant_turn(&v);
+                if !body.trim().is_empty() {
+                    turns.push(format!("✻ Claude\n{}", body));
+                }
+            }
+            _ => {} // skip bookkeeping types
+        }
+    }
+
+    let mut prefix = String::new();
+    let start = if turns.len() > max_turns {
+        prefix = format!("… (earlier turns omitted — showing last {} of {}) …\n\n", max_turns, turns.len());
+        turns.len() - max_turns
+    } else { 0 };
+
+    format!("{}{}", prefix, turns[start..].join("\n\n"))
+}
+
+fn render_user_turn(v: &serde_json::Value) -> Option<String> {
+    let content = v.get("message")?.get("content")?;
+    if let Some(s) = content.as_str() {
+        let s = s.trim();
+        return if s.is_empty() { None } else { Some(s.to_string()) };
+    }
+    if let Some(arr) = content.as_array() {
+        let mut out = String::new();
+        for block in arr {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
+                        out.push_str(t);
+                        out.push('\n');
+                    }
+                }
+                Some("image") => out.push_str("[image]\n"),
+                Some("tool_result") => {} // drop
+                _ => {}
+            }
+        }
+        let out = out.trim().to_string();
+        return if out.is_empty() { None } else { Some(out) };
+    }
+    None
+}
+
+fn render_assistant_turn(v: &serde_json::Value) -> String {
+    let mut out = String::new();
+    let content = match v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array()) {
+        Some(a) => a,
+        None => return out,
+    };
+    for block in content {
+        match block.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if let Some(t) = block.get("text").and_then(|x| x.as_str()) {
+                    out.push_str(t);
+                    out.push('\n');
+                }
+            }
+            Some("thinking") => {
+                let words = block.get("thinking").and_then(|x| x.as_str())
+                    .map(|t| t.split_whitespace().count()).unwrap_or(0);
+                out.push_str(&format!("  ✻ thinking… ({} words)\n", words));
+            }
+            Some("tool_use") => {
+                let name = block.get("name").and_then(|x| x.as_str()).unwrap_or("tool");
+                let arg = tool_key_arg(name, block.get("input"));
+                match arg {
+                    Some(a) if name == "Bash" => out.push_str(&format!("  ⚙ {}: {}\n", name, a)),
+                    Some(a) => out.push_str(&format!("  ⚙ {} {}\n", name, a)),
+                    None => out.push_str(&format!("  ⚙ {}\n", name)),
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Pick a one-line summary arg for a tool call. Bash uses `: cmd`; file tools show the path.
+fn tool_key_arg(name: &str, input: Option<&serde_json::Value>) -> Option<String> {
+    let input = input?;
+    let key = match name {
+        "Bash" => "command",
+        "Edit" | "Write" | "Read" | "NotebookEdit" => "file_path",
+        "Grep" | "Glob" => "pattern",
+        _ => return None,
+    };
+    input.get(key).and_then(|x| x.as_str()).map(|s| truncate_title(s, 60))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +343,36 @@ mod tests {
         let ids: Vec<&str> = out.iter().map(|e| e.id.as_str()).collect();
         // current worktree ("/dev/proj" → a) first; then others by recency desc: d(400), b(300)
         assert_eq!(ids, vec!["a", "d", "b"]);
+    }
+
+    #[test]
+    fn renders_turns_collapsing_tools_and_thinking() {
+        let jsonl = r#"{"type":"attachment","cwd":"/x"}
+{"type":"ai-title","aiTitle":"t"}
+{"type":"user","message":{"role":"user","content":"do the thing"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"one two three"},{"type":"text","text":"on it"},{"type":"tool_use","name":"Bash","input":{"command":"cargo build"}},{"type":"tool_use","name":"Edit","input":{"file_path":"src/lib.rs"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ignored"}]}}"#;
+        let out = render_transcript(jsonl, 200);
+        assert!(out.contains("▶ You"));
+        assert!(out.contains("do the thing"));
+        assert!(out.contains("✻ Claude"));
+        assert!(out.contains("on it"));
+        assert!(out.contains("thinking… (3 words)"));
+        assert!(out.contains("⚙ Bash: cargo build"));
+        assert!(out.contains("⚙ Edit src/lib.rs"));
+        assert!(!out.contains("ignored")); // tool_result dropped
+        assert!(!out.contains("ai-title") && !out.contains("\"type\""));
+    }
+
+    #[test]
+    fn caps_to_last_max_turns() {
+        let mut lines = Vec::new();
+        for i in 0..10 {
+            lines.push(format!("{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"msg{}\"}}}}", i));
+        }
+        let out = render_transcript(&lines.join("\n"), 3);
+        assert!(out.contains("earlier turns omitted"));
+        assert!(out.contains("msg9"));
+        assert!(!out.contains("msg0"));
     }
 }
