@@ -1738,9 +1738,24 @@ impl App {
         let start = crate::git::find_repo_root(&pane.current_path)
             .unwrap_or_else(|| pane.current_path.clone());
 
-        // The drill-down loop is multi-line shell, so it's embedded and written to a temp
-        // file rather than crammed into one display-popup command string.
-        let script_path = std::env::temp_dir().join("ccmux-browse.sh");
+        // The drill-down loop is multi-line shell, so it's embedded and written to a file
+        // rather than crammed into one display-popup command string. Write it into a
+        // user-private cache dir (mode 0700), NOT the shared temp dir: a predictable name
+        // in a world-writable /tmp invites a symlink / TOCTOU swap between write and `sh`
+        // (arbitrary code execution as the user on multi-user hosts).
+        let dir_base = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("ccmux");
+        if std::fs::create_dir_all(&dir_base).is_err() {
+            self.set_message("Could not create cache dir");
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir_base, std::fs::Permissions::from_mode(0o700));
+        }
+        let script_path = dir_base.join("browse.sh");
         if std::fs::write(&script_path, BROWSE_SH).is_err() {
             self.set_message("Could not write browse script");
             return;
