@@ -1271,6 +1271,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         row("g",      "Git status popup (status + diff)"),
         row("p",      "PR status popup (gh pr view + checks)"),
         row("f",      "Folder browser (tree + preview, edit)"),
+        row("F",      "neo-tree popup (Neovim explorer)"),
         row("e",      "Edit window — name and color"),
         row("K",      "Kill current window (confirm)"),
         Line::raw(""),

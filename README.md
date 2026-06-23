@@ -102,6 +102,7 @@ These mirror the in-app help — press `?` inside the sidebar to see them.
 | `g` | Git status popup — full `git status` + `diff` for the selected repo |
 | `p` | PR status popup — `gh pr view` + checks for the selected branch |
 | `f` | Folder browser — drill-down file tree with preview; opens files in `$CCMUX_EDITOR` (default `nano`) |
+| `F` | neo-tree popup — Neovim file explorer (isolated config; requires `nvim`) |
 | `e` | Edit the current window — name and color |
 | `K` | Kill the current window (with confirmation) |
 
@@ -167,6 +168,10 @@ since the last check to decide between "still working" and "settled".
   folders and a syntax-highlighted preview (`bat`) for files. Enter opens the file in an
   in-terminal editor — `$CCMUX_EDITOR` if set, otherwise `nano` (never vim). Built on
   `fzf`/`fd`/`eza`/`bat`.
+- **neo-tree popup** — `F` opens Neovim's neo-tree file explorer in a popup, rooted at the
+  project, for richer collapsible-tree navigation (files open in Neovim). Uses a fully
+  self-contained Neovim config bootstrapped into ccmux's cache dir, so it never touches
+  your own `~/.config/nvim`. Requires `nvim` (`brew install neovim`).
 - **Window management** — rename and recolor windows (`e`), create (`c`) or kill
   (`K`) them. Colors persist in a tmux variable and can drive the status bar.
 - **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace
