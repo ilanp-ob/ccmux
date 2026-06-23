@@ -169,9 +169,11 @@ since the last check to decide between "still working" and "settled".
   in-terminal editor — `$CCMUX_EDITOR` if set, otherwise `nano` (never vim). Built on
   `fzf`/`fd`/`eza`/`bat`.
 - **neo-tree popup** — `F` opens Neovim's neo-tree file explorer in a popup, rooted at the
-  project, for richer collapsible-tree navigation (files open in Neovim). Uses a fully
-  self-contained Neovim config bootstrapped into ccmux's cache dir, so it never touches
-  your own `~/.config/nvim`. Requires `nvim` (`brew install neovim`).
+  project, for richer collapsible-tree navigation (files open in Neovim). Includes
+  Telescope search: **`Ctrl-p`** fuzzy file-name search, **`Ctrl-g`** content search
+  (ripgrep), **`Ctrl-e`** toggle the tree back from a file. Uses a fully self-contained
+  Neovim config bootstrapped into ccmux's cache dir, so it never touches your own
+  `~/.config/nvim`. Requires `nvim` (`brew install neovim`); `Ctrl-g` needs `ripgrep`.
 - **Window management** — rename and recolor windows (`e`), create (`c`) or kill
   (`K`) them. Colors persist in a tmux variable and can drive the status bar.
 - **At-a-glance footer** — Claude usage (5h / 7d %, time to reset) and MemPalace

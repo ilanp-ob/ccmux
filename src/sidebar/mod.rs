@@ -1929,5 +1929,17 @@ require("lazy").setup({
       vim.schedule(function() pcall(vim.cmd, "Neotree position=current") end)
     end,
   },
+  {
+    "nvim-telescope/telescope.nvim",
+    branch = "0.1.x",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    config = function() require("telescope").setup({}) end,
+  },
 }, { ui = { border = "rounded" } })
+
+-- Search + navigation keymaps (work from the tree and from any open file).
+local map = vim.keymap.set
+map("n", "<C-p>", "<cmd>Telescope find_files<cr>", { desc = "Find files (name)" })
+map("n", "<C-g>", "<cmd>Telescope live_grep<cr>", { desc = "Search contents (grep)" })
+map("n", "<C-e>", "<cmd>Neotree toggle position=current<cr>", { desc = "Toggle file tree" })
 "#;
