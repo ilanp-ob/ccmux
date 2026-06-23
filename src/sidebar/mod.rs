@@ -1740,21 +1740,12 @@ impl App {
 
         // The drill-down loop is multi-line shell, so it's embedded and written to a file
         // rather than crammed into one display-popup command string. Write it into a
-        // user-private cache dir (mode 0700), NOT the shared temp dir: a predictable name
-        // in a world-writable /tmp invites a symlink / TOCTOU swap between write and `sh`
-        // (arbitrary code execution as the user on multi-user hosts).
-        let dir_base = dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("ccmux");
-        if std::fs::create_dir_all(&dir_base).is_err() {
+        // user-private cache dir (mode 0700), NOT the shared temp dir, to avoid a symlink /
+        // TOCTOU swap between write and `sh`.
+        let Some(dir_base) = private_cache_dir() else {
             self.set_message("Could not create cache dir");
             return;
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir_base, std::fs::Permissions::from_mode(0o700));
-        }
+        };
         let script_path = dir_base.join("browse.sh");
         if std::fs::write(&script_path, BROWSE_SH).is_err() {
             self.set_message("Could not write browse script");
@@ -1777,6 +1768,45 @@ impl App {
              if command -v fzf >/dev/null 2>&1; then {}sh {} {}; \
              else echo 'fzf not installed' | {}; fi",
             editor_prefix, script, dir, pager
+        );
+        let tmux = Tmux::new(self.managed_server.clone());
+        let _ = tmux.cmd()
+            .args(["display-popup", "-E", "-w", "90%", "-h", "90%", &inner])
+            .status();
+    }
+
+    /// Open a popup with Neovim's neo-tree file explorer rooted at the selected pane's
+    /// project. Uses a fully self-contained Neovim config (lazy.nvim + neo-tree bootstrapped
+    /// into an isolated cache dir via XDG_* overrides) so it never touches the user's own
+    /// Neovim setup. Files open in Neovim buffers — distinct from `f`/nano by design.
+    pub fn open_neotree_popup(&mut self) {
+        let Some(pane) = self.selected_pane() else { return };
+        let start = crate::git::find_repo_root(&pane.current_path)
+            .unwrap_or_else(|| pane.current_path.clone());
+        let Some(cache) = private_cache_dir() else {
+            self.set_message("Could not create cache dir");
+            return;
+        };
+        let init_path = cache.join("neotree-init.lua");
+        if std::fs::write(&init_path, NEOTREE_INIT).is_err() {
+            self.set_message("Could not write neo-tree config");
+            return;
+        }
+        // Isolate Neovim's config/data/state under the ccmux cache so nothing — not even
+        // lazy's lockfile — lands in the user's ~/.config/nvim or ~/.local/{share,state}.
+        let nv = cache.join("nvim");
+        let cfg = shell_quote(&nv.join("config").to_string_lossy());
+        let data = shell_quote(&nv.join("data").to_string_lossy());
+        let state = shell_quote(&nv.join("state").to_string_lossy());
+        let init = shell_quote(&init_path.to_string_lossy());
+        let dir = shell_quote(&start.to_string_lossy());
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
+        let inner = format!(
+            "export PATH=\"/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:$PATH\" && \
+             if command -v nvim >/dev/null 2>&1; then \
+             cd {} && env XDG_CONFIG_HOME={} XDG_DATA_HOME={} XDG_STATE_HOME={} nvim -u {}; \
+             else echo 'neovim not installed — run: brew install neovim' | {}; fi",
+            dir, cfg, data, state, init, pager
         );
         let tmux = Tmux::new(self.managed_server.clone());
         let _ = tmux.cmd()
@@ -1824,6 +1854,22 @@ impl App {
     }
 }
 
+/// User-private cache dir (`~/.cache/ccmux`, mode 0700), created if needed. Helper scripts
+/// and isolated tool configs are written here rather than the shared temp dir, so a
+/// predictable name can't be symlink/TOCTOU-swapped between write and exec.
+fn private_cache_dir() -> Option<std::path::PathBuf> {
+    let base = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ccmux");
+    std::fs::create_dir_all(&base).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    }
+    Some(base)
+}
+
 /// Wrap a string in single quotes for safe use in a shell command.
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -1851,4 +1897,37 @@ while true; do
   else "$editor" "$sel"; exit 0
   fi
 done
+"#;
+
+/// Self-contained Neovim config for the `F` neo-tree popup. Bootstraps lazy.nvim + neo-tree
+/// into whatever XDG_DATA_HOME the caller sets (ccmux isolates it under the private cache),
+/// so it never touches the user's own Neovim config. Opens the tree once, after neo-tree
+/// loads, rooted at Neovim's launch cwd.
+const NEOTREE_INIT: &str = r#"-- ccmux neo-tree popup config (isolated; do not edit — regenerated on use).
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+if not (vim.uv or vim.loop).fs_stat(lazypath) then
+  vim.fn.system({ "git", "clone", "--filter=blob:none",
+    "https://github.com/folke/lazy.nvim.git", "--branch=stable", lazypath })
+end
+vim.opt.rtp:prepend(lazypath)
+
+require("lazy").setup({
+  {
+    "nvim-neo-tree/neo-tree.nvim",
+    branch = "v3.x",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-tree/nvim-web-devicons",
+      "MunifTanjim/nui.nvim",
+    },
+    config = function()
+      require("neo-tree").setup({
+        close_if_last_window = true,
+        window = { position = "current" },
+        filesystem = { hijack_netrw_behavior = "open_current" },
+      })
+      vim.schedule(function() pcall(vim.cmd, "Neotree position=current") end)
+    end,
+  },
+}, { ui = { border = "rounded" } })
 "#;
