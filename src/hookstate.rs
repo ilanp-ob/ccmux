@@ -101,9 +101,41 @@ pub fn unmerge_hooks_from_settings(existing: &str) -> Option<String> {
     serde_json::to_string_pretty(&root).ok()
 }
 
+use crate::session::ClaudeCodeStatus;
+
+pub const STALE_WORKING_SECS: i64 = 90;
+
+pub fn resolve_status(
+    pane_cwd: &str,
+    states: &[SessionState],
+    scraped: ClaudeCodeStatus,
+    content_changed: bool,
+    now: i64,
+) -> ClaudeCodeStatus {
+    let fresh = states.iter()
+        .filter(|s| s.cwd == pane_cwd && s.status != HookStatus::Ended)
+        .max_by_key(|s| s.updated_at);
+    let Some(s) = fresh else { return scraped; };
+
+    if s.status == HookStatus::Working
+        && (now - s.updated_at) > STALE_WORKING_SECS
+        && !content_changed
+    {
+        return scraped; // missed Stop — defer to the screen scraper
+    }
+
+    match s.status {
+        HookStatus::Working => ClaudeCodeStatus::Working,
+        HookStatus::Idle => ClaudeCodeStatus::Idle,
+        HookStatus::Waiting => ClaudeCodeStatus::WaitingInput,
+        HookStatus::Ended => scraped, // unreachable (filtered above)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::ClaudeCodeStatus;
 
     fn ev(event: &str, notif: Option<&str>) -> String {
         let n = notif
@@ -219,5 +251,51 @@ mod tests {
     #[test]
     fn unparseable_returns_none() {
         assert!(merge_hooks_into_settings("{not json", "/bin/ccmux").is_none());
+    }
+
+    fn st(cwd: &str, status: HookStatus, updated_at: i64) -> SessionState {
+        SessionState { session_id: format!("{}-{}", cwd, updated_at), cwd: cwd.into(), status, updated_at }
+    }
+
+    #[test]
+    fn no_state_falls_back_to_scraped() {
+        let got = resolve_status("/repo", &[], ClaudeCodeStatus::Working, false, 100);
+        assert_eq!(got, ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn authoritative_state_wins_over_scraped() {
+        let states = [st("/repo", HookStatus::Waiting, 100)];
+        let got = resolve_status("/repo", &states, ClaudeCodeStatus::Idle, false, 100);
+        assert_eq!(got, ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn freshest_same_cwd_wins() {
+        let states = [st("/repo", HookStatus::Working, 100), st("/repo", HookStatus::Idle, 200)];
+        let got = resolve_status("/repo", &states, ClaudeCodeStatus::Unknown, false, 200);
+        assert_eq!(got, ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn stale_working_unchanged_defers_to_scraped() {
+        let states = [st("/repo", HookStatus::Working, 0)];
+        // now far past STALE_WORKING_SECS, content unchanged → defer to scraped
+        let got = resolve_status("/repo", &states, ClaudeCodeStatus::Idle, false, 1000);
+        assert_eq!(got, ClaudeCodeStatus::Idle);
+    }
+
+    #[test]
+    fn stale_working_but_content_changing_stays_working() {
+        let states = [st("/repo", HookStatus::Working, 0)];
+        let got = resolve_status("/repo", &states, ClaudeCodeStatus::Idle, true, 1000);
+        assert_eq!(got, ClaudeCodeStatus::Working);
+    }
+
+    #[test]
+    fn ended_state_ignored() {
+        let states = [st("/repo", HookStatus::Ended, 200)];
+        let got = resolve_status("/repo", &states, ClaudeCodeStatus::Idle, false, 200);
+        assert_eq!(got, ClaudeCodeStatus::Idle); // ended skipped → fall back to scraped
     }
 }
