@@ -102,8 +102,85 @@ pub fn unmerge_hooks_from_settings(existing: &str) -> Option<String> {
 }
 
 use crate::session::ClaudeCodeStatus;
+use std::path::PathBuf;
 
+pub const STATE_TTL_DAYS: i64 = 7;
 pub const STALE_WORKING_SECS: i64 = 90;
+
+/// `~/.cache/ccmux/sessions/` (created 0700 via the shared cache helper).
+pub fn sessions_dir() -> Option<PathBuf> {
+    let dir = crate::sidebar::private_cache_dir()?.join("sessions");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+fn status_str(s: HookStatus) -> &'static str {
+    match s {
+        HookStatus::Working => "working",
+        HookStatus::Idle => "idle",
+        HookStatus::Waiting => "waiting",
+        HookStatus::Ended => "ended",
+    }
+}
+
+fn status_from_str(s: &str) -> Option<HookStatus> {
+    match s {
+        "working" => Some(HookStatus::Working),
+        "idle" => Some(HookStatus::Idle),
+        "waiting" => Some(HookStatus::Waiting),
+        "ended" => Some(HookStatus::Ended),
+        _ => None,
+    }
+}
+
+/// Write/overwrite a session's state file. Errors are swallowed (best-effort).
+pub fn write_state(s: &SessionState) {
+    let Some(dir) = sessions_dir() else { return };
+    // session_id is a UUID; still sanitize to be safe against path traversal.
+    let safe: String = s.session_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    if safe.is_empty() { return; }
+    let json = serde_json::json!({
+        "session_id": s.session_id,
+        "cwd": s.cwd,
+        "status": status_str(s.status),
+        "updated_at": s.updated_at,
+    });
+    let _ = std::fs::write(dir.join(format!("{}.json", safe)), json.to_string());
+}
+
+/// Load all session states, GC'ing ended/expired ones.
+pub fn load_states() -> Vec<SessionState> {
+    let Some(dir) = sessions_dir() else { return Vec::new() };
+    let now = now_secs();
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(&dir) else { return out };
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
+        let Ok(txt) = std::fs::read_to_string(&path) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else { continue };
+        let session_id = v["session_id"].as_str().unwrap_or("").to_string();
+        let cwd = v["cwd"].as_str().unwrap_or("").to_string();
+        let updated_at = v["updated_at"].as_i64().unwrap_or(0);
+        let status = v["status"].as_str().and_then(status_from_str);
+        let Some(status) = status else { continue };
+        // GC: ended, or older than TTL.
+        if status == HookStatus::Ended || (now - updated_at) > STATE_TTL_DAYS * 86400 {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        if session_id.is_empty() || cwd.is_empty() { continue; }
+        out.push(SessionState { session_id, cwd, status, updated_at });
+    }
+    out
+}
+
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 pub fn resolve_status(
     pane_cwd: &str,
@@ -298,4 +375,5 @@ mod tests {
         let got = resolve_status("/repo", &states, ClaudeCodeStatus::Idle, false, 200);
         assert_eq!(got, ClaudeCodeStatus::Idle); // ended skipped → fall back to scraped
     }
+
 }

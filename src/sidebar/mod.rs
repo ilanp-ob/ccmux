@@ -1857,7 +1857,7 @@ impl App {
 /// User-private cache dir (`~/.cache/ccmux`, mode 0700), created if needed. Helper scripts
 /// and isolated tool configs are written here rather than the shared temp dir, so a
 /// predictable name can't be symlink/TOCTOU-swapped between write and exec.
-fn private_cache_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn private_cache_dir() -> Option<std::path::PathBuf> {
     let base = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("ccmux");
