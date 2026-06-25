@@ -3,6 +3,7 @@ mod detection;
 mod git;
 mod gitstatus;
 mod history;
+mod hookstate;
 mod jobs;
 mod notify;
 mod session;
