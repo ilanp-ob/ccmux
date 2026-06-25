@@ -80,6 +80,9 @@ enum Cmd {
         /// Short session ID (8-char daemonShort from roster.json)
         session: String,
     },
+    /// Record a Claude Code lifecycle hook event (called from settings.json hooks)
+    #[command(name = "hook-event", hide = true)]
+    HookEvent,
 }
 
 fn main() -> Result<()> {
@@ -94,6 +97,7 @@ fn main() -> Result<()> {
         Cmd::Close { server } => run_close(server),
         Cmd::Setup { server } => run_setup(server),
         Cmd::PtyAttach { session } => run_pty_attach(&session),
+        Cmd::HookEvent => run_hook_event(),
     }
 }
 
@@ -599,6 +603,19 @@ fn run_setup(server: Option<String>) -> Result<()> {
     println!("To disable:  ccmux close  (closes all sidebars)");
     println!("             tmux set-option -g @ccmux_sticky 0");
 
+    Ok(())
+}
+
+/// Read a Claude Code hook JSON payload from stdin and record the session's status.
+/// Best-effort and fast: never fails a Claude turn (always returns Ok).
+fn run_hook_event() -> Result<()> {
+    use std::io::Read;
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_ok() {
+        if let Some(state) = hookstate::parse_event(&buf, hookstate::now_secs()) {
+            hookstate::write_state(&state);
+        }
+    }
     Ok(())
 }
 
