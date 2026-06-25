@@ -65,13 +65,15 @@ set -g @ccmux-toggle-key C-c     # prefix + C-c toggles the sidebar
 ```
 
 Press `prefix + I` to install the plugin, then run the one-time setup to install
-the auto-open hooks and `prefix + Ctrl+1..9` session-jump bindings:
+the tmux auto-open hooks, `prefix + Ctrl+1..9` session-jump bindings, and Claude Code
+lifecycle hooks:
 
 ```bash
 ccmux setup
 ```
 
-That's it. `prefix + C-c` now toggles the sidebar in the current window.
+That's it. `prefix + C-c` now toggles the sidebar in the current window. If you move the
+`ccmux` binary, re-run `ccmux setup` so the Claude Code hooks pick up the new path.
 
 See [`docs/tmux-setup.md`](docs/tmux-setup.md) for the optional status-bar
 integration that renders the status icon next to each window name.
@@ -118,8 +120,15 @@ The title bar shows `ccmux [S]` when sticky mode is on.
 
 ## Status detection
 
-ccmux classifies each session by reading its pane content. No status is reported
-by Claude itself — it's all inferred from what's on screen.
+ccmux classifies each session from Claude Code's real lifecycle events when available
+(via hooks installed by `ccmux setup`), or by reading pane content as a fallback.
+
+**Authoritative status** (Claude Code hooks): Sessions with hooks installed report
+status from Claude's actual lifecycle events (thinking, waiting, idle), so the status
+is up-to-date and accurate regardless of what's on screen.
+
+**Screen-based fallback** (ocli / ops-cli / pre-setup): For `ocli`/`ops-cli` panes and
+sessions before `ccmux setup` is run, ccmux infers status by reading pane content:
 
 | Icon | Status | Detected from |
 |------|--------|---------------|
@@ -228,7 +237,8 @@ ccmux is one binary with subcommands; most are invoked by tmux for you.
 | Command | Purpose |
 |---------|---------|
 | `ccmux toggle` | Open/close the sidebar in the current window (bound to your toggle key) |
-| `ccmux setup` | Install auto-open hooks and `prefix + Ctrl+1..9` jump bindings |
+| `ccmux setup` | Install tmux and Claude Code lifecycle hooks; `--uninstall` to remove them |
+| `ccmux hook-event` | Record a Claude Code lifecycle event (called by hooks; not for manual use) |
 | `ccmux close` | Close every ccmux sidebar on this tmux server |
 | `ccmux status --window <id>` | Print the status icon for the tmux status bar |
 | `ccmux focus <N>` | Jump to session #N (auto-opens the sidebar) |

@@ -503,6 +503,10 @@ impl App {
 
         let tmux = Tmux::new(self.managed_server.clone());
 
+        // Load hook-state once per tick for authoritative status overlay.
+        let hook_states = crate::hookstate::load_states();
+        let hook_now = crate::hookstate::now_secs();
+
         // Collect pane IDs first to avoid borrow conflicts
         let pane_ids: Vec<String> = self.groups.iter()
             .flat_map(|g| g.panes.iter())
@@ -550,6 +554,17 @@ impl App {
             for group in &mut self.groups {
                 for pane in &mut group.panes {
                     if pane.pane_id == pane_id {
+                        // Hook-state overlay: apply authoritative hook-state before jobs overlay.
+                        let content_changed = self.pane_content_cache.get(&pane_id) != Some(&content);
+                        let scraped = new_status.clone();
+                        let new_status = crate::hookstate::resolve_status(
+                            &pane.current_path.to_string_lossy(),
+                            &hook_states,
+                            scraped,
+                            content_changed,
+                            hook_now,
+                        );
+
                         // Hybrid fallback: if terminal content gives Idle/Unknown, defer to
                         // the daemon job's state.json (already loaded in self.jobs) for the
                         // same cwd — Working or Blocked there are authoritative.
@@ -1857,7 +1872,7 @@ impl App {
 /// User-private cache dir (`~/.cache/ccmux`, mode 0700), created if needed. Helper scripts
 /// and isolated tool configs are written here rather than the shared temp dir, so a
 /// predictable name can't be symlink/TOCTOU-swapped between write and exec.
-fn private_cache_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn private_cache_dir() -> Option<std::path::PathBuf> {
     let base = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("ccmux");

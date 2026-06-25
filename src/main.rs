@@ -3,6 +3,7 @@ mod detection;
 mod git;
 mod gitstatus;
 mod history;
+mod hookstate;
 mod jobs;
 mod notify;
 mod session;
@@ -72,6 +73,9 @@ enum Cmd {
     Setup {
         #[arg(long)]
         server: Option<String>,
+        /// Remove ccmux's tmux + Claude Code hooks
+        #[arg(long)]
+        uninstall: bool,
     },
     /// Attach directly to a running daemon agent via its PTY socket
     #[command(name = "pty-attach", hide = true)]
@@ -79,6 +83,9 @@ enum Cmd {
         /// Short session ID (8-char daemonShort from roster.json)
         session: String,
     },
+    /// Record a Claude Code lifecycle hook event (called from settings.json hooks)
+    #[command(name = "hook-event", hide = true)]
+    HookEvent,
 }
 
 fn main() -> Result<()> {
@@ -91,8 +98,9 @@ fn main() -> Result<()> {
         Cmd::NotifyWorker { server } => run_notify_worker(server),
         Cmd::AutoOpen { window, server } => run_auto_open(window, server),
         Cmd::Close { server } => run_close(server),
-        Cmd::Setup { server } => run_setup(server),
+        Cmd::Setup { server, uninstall } => run_setup(server, uninstall),
         Cmd::PtyAttach { session } => run_pty_attach(&session),
+        Cmd::HookEvent => run_hook_event(),
     }
 }
 
@@ -531,7 +539,50 @@ fn run_auto_open(window: Option<String>, server: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn run_setup(server: Option<String>) -> Result<()> {
+/// Additively install (or remove) ccmux's Claude Code hooks in ~/.claude/settings.json.
+/// Backs up first; aborts (no write) if existing settings JSON is unparseable.
+fn install_claude_hooks(uninstall: bool) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = std::path::Path::new(&home).join(".claude").join("settings.json");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "ccmux".to_string());
+
+    let updated = if uninstall {
+        if existing.trim().is_empty() { return Ok(()); }
+        hookstate::unmerge_hooks_from_settings(&existing)
+    } else {
+        hookstate::merge_hooks_into_settings(&existing, &binary)
+    };
+
+    let Some(updated) = updated else {
+        anyhow::bail!("~/.claude/settings.json is not valid JSON — not modifying it. Fix it and re-run.");
+    };
+
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    if !existing.trim().is_empty() {
+        let _ = std::fs::write(path.with_extension("json.ccmux-bak"), &existing);
+    }
+    std::fs::write(&path, updated)?;
+    println!("✓ {} Claude Code hooks in {}", if uninstall { "Removed" } else { "Installed" }, path.display());
+    Ok(())
+}
+
+fn run_setup(server: Option<String>, uninstall: bool) -> Result<()> {
+    install_claude_hooks(uninstall)?;
+
+    if uninstall {
+        let tmux = tmux::Tmux::new(server.clone());
+        for hook in ["after-select-window", "after-new-window"] {
+            let _ = tmux.cmd().args(["set-hook", "-gu", hook]).status();
+        }
+        let _ = tmux.set_var("@ccmux_sticky", "0");
+        println!("✓ Removed tmux hooks + sticky");
+        return Ok(());
+    }
+
     let tmux = tmux::Tmux::new(server.clone());
 
     let binary = std::env::current_exe()
@@ -598,6 +649,19 @@ fn run_setup(server: Option<String>) -> Result<()> {
     println!("To disable:  ccmux close  (closes all sidebars)");
     println!("             tmux set-option -g @ccmux_sticky 0");
 
+    Ok(())
+}
+
+/// Read a Claude Code hook JSON payload from stdin and record the session's status.
+/// Best-effort and fast: never fails a Claude turn (always returns Ok).
+fn run_hook_event() -> Result<()> {
+    use std::io::Read;
+    let mut buf = String::new();
+    if std::io::stdin().read_to_string(&mut buf).is_ok() {
+        if let Some(state) = hookstate::parse_event(&buf, hookstate::now_secs()) {
+            hookstate::write_state(&state);
+        }
+    }
     Ok(())
 }
 
