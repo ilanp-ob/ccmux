@@ -230,6 +230,21 @@ Available models: `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`,
 `claude-sonnet-4-6`, `claude-haiku-4-5`. Efforts: `low`, `medium`, `high`,
 `max`, `auto`.
 
+## Control CLI
+
+Drive the Claude sessions ccmux manages from scripts (e.g. an orchestrator):
+
+| Command | Purpose |
+|---------|---------|
+| `ccmux list [--json]` | List Claude sessions: window id, name, cwd, status, session id |
+| `ccmux send --window <@id\|name> "<text>"` | Send a prompt/keys to a session |
+| `ccmux read --window <@id\|name> [--lines N]` | Print a session's pane content |
+| `ccmux wait --window <@id\|name> [--until idle\|waiting\|settled] [--timeout S]` | Block until the session reaches a status (exit 0 reached / 2 timeout) |
+| `ccmux spawn --dir <path> --name <name> [--prompt "…"] [--model M] [--effort E]` | Launch a new Claude session in a new window |
+
+Status comes from the authoritative hook-state (run `ccmux setup` to install the
+hooks). `wait` relies on it. Sessions are addressed by tmux window (`@id` or name).
+
 ## CLI
 
 ccmux is one binary with subcommands; most are invoked by tmux for you.
