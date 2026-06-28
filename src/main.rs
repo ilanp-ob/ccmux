@@ -1,4 +1,5 @@
 mod config;
+mod control;
 mod detection;
 mod git;
 mod gitstatus;
@@ -86,6 +87,41 @@ enum Cmd {
     /// Record a Claude Code lifecycle hook event (called from settings.json hooks)
     #[command(name = "hook-event", hide = true)]
     HookEvent,
+    /// List detected Claude sessions (control CLI)
+    List {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Send text to a session's Claude pane (control CLI)
+    Send {
+        #[arg(long)] window: String,
+        text: String,
+        #[arg(long)] server: Option<String>,
+    },
+    /// Read a session's pane content (control CLI)
+    Read {
+        #[arg(long)] window: String,
+        #[arg(long)] lines: Option<usize>,
+        #[arg(long)] server: Option<String>,
+    },
+    /// Wait until a session reaches a status (control CLI)
+    Wait {
+        #[arg(long)] window: String,
+        #[arg(long, default_value = "settled")] until: String,
+        #[arg(long, default_value_t = 300)] timeout: u64,
+        #[arg(long)] server: Option<String>,
+    },
+    /// Spawn a new Claude session in a window (control CLI)
+    Spawn {
+        #[arg(long)] dir: String,
+        #[arg(long)] name: String,
+        #[arg(long)] prompt: Option<String>,
+        #[arg(long)] model: Option<String>,
+        #[arg(long)] effort: Option<String>,
+        #[arg(long)] server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -101,6 +137,12 @@ fn main() -> Result<()> {
         Cmd::Setup { server, uninstall } => run_setup(server, uninstall),
         Cmd::PtyAttach { session } => run_pty_attach(&session),
         Cmd::HookEvent => run_hook_event(),
+        Cmd::List { json, server } => control::run_list(server, json),
+        Cmd::Send { window, text, server } => control::run_send(server, window, text),
+        Cmd::Read { window, lines, server } => control::run_read(server, window, lines),
+        Cmd::Wait { window, until, timeout, server } => control::run_wait(server, window, until, timeout),
+        Cmd::Spawn { dir, name, prompt, model, effort, server } =>
+            control::run_spawn(server, dir, name, prompt, model, effort),
     }
 }
 
@@ -136,28 +178,24 @@ fn run_status(server: Option<&str>, window: Option<&str>) -> Result<()> {
     // Find Claude pane in this window
     let output = tmux.cmd()
         .args(["list-panes", "-t", &window_id, "-F",
-               "#{pane_id}\t#{pane_current_command}"])
+               "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}"])
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let claude_pane = stdout.lines().find_map(|line| {
-        let mut parts = line.splitn(2, '\t');
+    let claude = stdout.lines().find_map(|line| {
+        let mut parts = line.splitn(3, '\t');
         let pane_id = parts.next()?;
         let cmd = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("");
         if cmd == "claude" || cmd.contains("claude") {
-            Some(pane_id.to_string())
-        } else {
-            None
-        }
+            Some((pane_id.to_string(), path.to_string()))
+        } else { None }
     });
-
-    let Some(pane_id) = claude_pane else {
-        print!(" ");
-        return Ok(());
-    };
+    let Some((pane_id, cwd)) = claude else { print!(" "); return Ok(()); };
 
     let content = tmux.capture_pane(&pane_id, 30, true).unwrap_or_default();
-    let status = detection::detect_status(&content);
+    let scraped = detection::detect_status(&content);
+    let status = hookstate::resolve_status(&cwd, &hookstate::load_states(), scraped, false, hookstate::now_secs());
     print!("{}", status.icon());
     Ok(())
 }
