@@ -113,6 +113,15 @@ enum Cmd {
         #[arg(long, default_value_t = 300)] timeout: u64,
         #[arg(long)] server: Option<String>,
     },
+    /// Spawn a new Claude session in a window (control CLI)
+    Spawn {
+        #[arg(long)] dir: String,
+        #[arg(long)] name: String,
+        #[arg(long)] prompt: Option<String>,
+        #[arg(long)] model: Option<String>,
+        #[arg(long)] effort: Option<String>,
+        #[arg(long)] server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -132,6 +141,8 @@ fn main() -> Result<()> {
         Cmd::Send { window, text, server } => control::run_send(server, window, text),
         Cmd::Read { window, lines, server } => control::run_read(server, window, lines),
         Cmd::Wait { window, until, timeout, server } => control::run_wait(server, window, until, timeout),
+        Cmd::Spawn { dir, name, prompt, model, effort, server } =>
+            control::run_spawn(server, dir, name, prompt, model, effort),
     }
 }
 

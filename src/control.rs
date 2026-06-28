@@ -127,6 +127,36 @@ pub fn status_matches(s: ClaudeCodeStatus, t: WaitTarget) -> bool {
 
 pub fn selector_is_id(s: &str) -> bool { s.starts_with('@') }
 
+/// Quote a string for safe inclusion in a single shell command.
+fn sh_quote(s: &str) -> String { format!("'{}'", s.replace('\'', "'\\''")) }
+
+pub fn run_spawn(
+    server: Option<String>, dir: String, name: String,
+    prompt: Option<String>, model: Option<String>, effort: Option<String>,
+) -> anyhow::Result<()> {
+    let cfg = crate::config::Config::load()?;
+    let model = model.unwrap_or(cfg.claude.default_model);
+    let effort = effort.unwrap_or(cfg.claude.default_effort);
+    let tmux = Tmux::new(server);
+    let session = tmux.current_session()?.unwrap_or_default();
+    let path = std::path::PathBuf::from(&dir);
+    if !path.is_dir() {
+        eprintln!("ccmux: not a directory: {}", dir);
+        std::process::exit(1);
+    }
+    let window_id = tmux.new_window(&session, &name, &path)?;
+    // Initial prompt is passed as claude's trailing arg (no typing race).
+    let prompt_arg = match &prompt {
+        Some(p) if !p.is_empty() => format!(" {}", sh_quote(p)),
+        _ => String::new(),
+    };
+    let launch = format!("claude --model {} --effort {} --name {}{}",
+        model, effort, sh_quote(&name), prompt_arg);
+    tmux.send_keys(&window_id, &launch)?;
+    println!("{}", serde_json::json!({ "window_id": window_id, "name": name }));
+    Ok(())
+}
+
 pub const WAIT_POLL_MS: u64 = 500;
 
 pub fn run_wait(server: Option<String>, window: String, until: String, timeout: u64) -> anyhow::Result<()> {
