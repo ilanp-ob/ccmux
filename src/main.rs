@@ -1,4 +1,5 @@
 mod config;
+mod control;
 mod detection;
 mod git;
 mod gitstatus;
