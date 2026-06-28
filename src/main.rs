@@ -178,28 +178,24 @@ fn run_status(server: Option<&str>, window: Option<&str>) -> Result<()> {
     // Find Claude pane in this window
     let output = tmux.cmd()
         .args(["list-panes", "-t", &window_id, "-F",
-               "#{pane_id}\t#{pane_current_command}"])
+               "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}"])
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let claude_pane = stdout.lines().find_map(|line| {
-        let mut parts = line.splitn(2, '\t');
+    let claude = stdout.lines().find_map(|line| {
+        let mut parts = line.splitn(3, '\t');
         let pane_id = parts.next()?;
         let cmd = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("");
         if cmd == "claude" || cmd.contains("claude") {
-            Some(pane_id.to_string())
-        } else {
-            None
-        }
+            Some((pane_id.to_string(), path.to_string()))
+        } else { None }
     });
-
-    let Some(pane_id) = claude_pane else {
-        print!(" ");
-        return Ok(());
-    };
+    let Some((pane_id, cwd)) = claude else { print!(" "); return Ok(()); };
 
     let content = tmux.capture_pane(&pane_id, 30, true).unwrap_or_default();
-    let status = detection::detect_status(&content);
+    let scraped = detection::detect_status(&content);
+    let status = hookstate::resolve_status(&cwd, &hookstate::load_states(), scraped, false, hookstate::now_secs());
     print!("{}", status.icon());
     Ok(())
 }
