@@ -87,6 +87,13 @@ enum Cmd {
     /// Record a Claude Code lifecycle hook event (called from settings.json hooks)
     #[command(name = "hook-event", hide = true)]
     HookEvent,
+    /// List detected Claude sessions (control CLI)
+    List {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -102,6 +109,7 @@ fn main() -> Result<()> {
         Cmd::Setup { server, uninstall } => run_setup(server, uninstall),
         Cmd::PtyAttach { session } => run_pty_attach(&session),
         Cmd::HookEvent => run_hook_event(),
+        Cmd::List { json, server } => control::run_list(server, json),
     }
 }
 
