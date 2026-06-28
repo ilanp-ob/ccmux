@@ -39,6 +39,33 @@ pub fn resolve_window(tmux: &Tmux, session: &str, selector: &str, commands: &[St
 }
 
 /// List every detected Claude session with authoritative status.
+fn resolve_or_exit(tmux: &Tmux, selector: &str) -> ResolvedWindow {
+    let commands = crate::config::Config::load().map(|c| c.detection.commands).unwrap_or_default();
+    let session = tmux.current_session().ok().flatten().unwrap_or_default();
+    match resolve_window(tmux, &session, selector, &commands) {
+        Some(r) => r,
+        None => {
+            eprintln!("ccmux: no Claude session in window '{}'", selector);
+            std::process::exit(1);
+        }
+    }
+}
+
+pub fn run_send(server: Option<String>, window: String, text: String) -> anyhow::Result<()> {
+    let tmux = Tmux::new(server);
+    let r = resolve_or_exit(&tmux, &window);
+    tmux.send_keys(&r.claude_pane_id, &text)?;
+    Ok(())
+}
+
+pub fn run_read(server: Option<String>, window: String, lines: Option<usize>) -> anyhow::Result<()> {
+    let tmux = Tmux::new(server);
+    let r = resolve_or_exit(&tmux, &window);
+    let content = tmux.capture_pane(&r.claude_pane_id, lines.unwrap_or(50), true)?;
+    print!("{}", content);
+    Ok(())
+}
+
 pub fn run_list(server: Option<String>, json: bool) -> anyhow::Result<()> {
     let cfg = crate::config::Config::load()?;
     let tmux = Tmux::new(server.clone());

@@ -94,6 +94,18 @@ enum Cmd {
         #[arg(long)]
         server: Option<String>,
     },
+    /// Send text to a session's Claude pane (control CLI)
+    Send {
+        #[arg(long)] window: String,
+        text: String,
+        #[arg(long)] server: Option<String>,
+    },
+    /// Read a session's pane content (control CLI)
+    Read {
+        #[arg(long)] window: String,
+        #[arg(long)] lines: Option<usize>,
+        #[arg(long)] server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -110,6 +122,8 @@ fn main() -> Result<()> {
         Cmd::PtyAttach { session } => run_pty_attach(&session),
         Cmd::HookEvent => run_hook_event(),
         Cmd::List { json, server } => control::run_list(server, json),
+        Cmd::Send { window, text, server } => control::run_send(server, window, text),
+        Cmd::Read { window, lines, server } => control::run_read(server, window, lines),
     }
 }
 
