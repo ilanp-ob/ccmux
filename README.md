@@ -245,6 +245,10 @@ Drive the Claude sessions ccmux manages from scripts (e.g. an orchestrator):
 Status comes from the authoritative hook-state (run `ccmux setup` to install the
 hooks). `wait` relies on it. Sessions are addressed by tmux window (`@id` or name).
 
+When scripting `spawn`, `wait` (or briefly retry) before the first `send`: right
+after `spawn` the new pane is still starting Claude, so an immediate `send` can
+miss it. The typical loop is `spawn → wait --until settled → read/send`.
+
 ## CLI
 
 ccmux is one binary with subcommands; most are invoked by tmux for you.
