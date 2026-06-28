@@ -127,6 +127,34 @@ pub fn status_matches(s: ClaudeCodeStatus, t: WaitTarget) -> bool {
 
 pub fn selector_is_id(s: &str) -> bool { s.starts_with('@') }
 
+pub const WAIT_POLL_MS: u64 = 500;
+
+pub fn run_wait(server: Option<String>, window: String, until: String, timeout: u64) -> anyhow::Result<()> {
+    let target = match parse_until(&until) {
+        Some(t) => t,
+        None => { eprintln!("ccmux: invalid --until '{}' (use idle|waiting|settled)", until); std::process::exit(1); }
+    };
+    let tmux = Tmux::new(server);
+    let r = resolve_or_exit(&tmux, &window);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    loop {
+        let states = crate::hookstate::load_states();
+        let now = crate::hookstate::now_secs();
+        // hook-state authoritative; scraped fallback = Unknown (wait relies on hooks).
+        let status = crate::hookstate::resolve_status(&r.cwd, &states, crate::session::ClaudeCodeStatus::Unknown, false, now);
+        if status_matches(status.clone(), target) {
+            println!("{}", serde_json::json!({ "window": window, "status": status_label(status) }));
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            println!("{}", serde_json::json!({ "window": window, "status": status_label(status), "timeout": true }));
+            std::process::exit(2);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(WAIT_POLL_MS));
+    }
+}
+
 pub fn status_label(s: ClaudeCodeStatus) -> &'static str {
     use ClaudeCodeStatus as S;
     match s {

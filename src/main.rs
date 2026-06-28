@@ -106,6 +106,13 @@ enum Cmd {
         #[arg(long)] lines: Option<usize>,
         #[arg(long)] server: Option<String>,
     },
+    /// Wait until a session reaches a status (control CLI)
+    Wait {
+        #[arg(long)] window: String,
+        #[arg(long, default_value = "settled")] until: String,
+        #[arg(long, default_value_t = 300)] timeout: u64,
+        #[arg(long)] server: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -124,6 +131,7 @@ fn main() -> Result<()> {
         Cmd::List { json, server } => control::run_list(server, json),
         Cmd::Send { window, text, server } => control::run_send(server, window, text),
         Cmd::Read { window, lines, server } => control::run_read(server, window, lines),
+        Cmd::Wait { window, until, timeout, server } => control::run_wait(server, window, until, timeout),
     }
 }
 
